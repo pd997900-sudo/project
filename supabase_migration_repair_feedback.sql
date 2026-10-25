@@ -1,0 +1,9 @@
+-- ====================================================================
+-- NOTE: THIS FILE IS DEPRECATED AND MERGED TO PREVENT DUPLICATE MIGRATIONS
+-- ====================================================================
+-- The canonical, single, complete SQL migration script is located at:
+-- supabase_migration_complaint_feedback.sql
+--
+-- Please execute `supabase_migration_complaint_feedback.sql` in the Supabase SQL Editor:
+-- https://supabase.com/dashboard/project/rblhbjmenbghvacljjwv/sql
+-- ====================================================================
