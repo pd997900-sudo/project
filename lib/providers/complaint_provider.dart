@@ -5,7 +5,10 @@ import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/complaint_model.dart';
+import '../models/india_districts.dart';
+import '../models/repair_team_model.dart';
 import '../services/supabase_service.dart';
+import '../services/location_service.dart';
 
 class WorkProgressResult {
   final bool success;
@@ -30,6 +33,10 @@ class ComplaintProvider extends ChangeNotifier with WidgetsBindingObserver {
   bool _hasPendingRefresh = false;
   String _searchQuery = '';
   String _selectedFilter = 'All';
+  String? _selectedStateFilter;
+  String? _selectedDistrictFilter;
+  String _selectedCategoryFilter = 'All';
+  String _selectedSeverityFilter = 'All';
   String? _deviceVoterId;
   RealtimeChannel? _realtimeChannel;
 
@@ -546,8 +553,124 @@ class ComplaintProvider extends ChangeNotifier with WidgetsBindingObserver {
   int get pendingCount => _complaints.where((c) => c.status != 'Completed' && c.status != 'Rejected').length;
   int get completedCount => _complaints.where((c) => c.status == 'Completed').length;
   int get emergencyCount => _complaints.where((c) => c.isEmergency && c.status != 'Completed' && c.status != 'Rejected').length;
+  int get activeReportsCount => _complaints.where((c) => c.isActive).length;
+  int get inRepairCount => _complaints.where((c) => c.status.toLowerCase() == 'accepted' || c.status.toLowerCase() == 'work started' || c.status.toLowerCase() == 'repair in progress' || c.status.toLowerCase() == 'near completion').length;
 
-  // Filtered complaints for Community User
+  String? get selectedStateFilter => _selectedStateFilter;
+  String? get selectedDistrictFilter => _selectedDistrictFilter;
+  String get selectedCategoryFilter => _selectedCategoryFilter;
+  String get selectedSeverityFilter => _selectedSeverityFilter;
+
+  void setSelectedStateFilter(String? state) {
+    _selectedStateFilter = state;
+    _selectedDistrictFilter = null;
+    notifyListeners();
+  }
+
+  void setSelectedDistrictFilter(String? district) {
+    _selectedDistrictFilter = district;
+    notifyListeners();
+  }
+
+  void setSelectedCategoryFilter(String category) {
+    _selectedCategoryFilter = category;
+    notifyListeners();
+  }
+
+  void setSelectedSeverityFilter(String severity) {
+    _selectedSeverityFilter = severity;
+    notifyListeners();
+  }
+
+  Map<String, int> get complaintsCountByState {
+    final Map<String, int> map = {};
+    for (var c in _complaints) {
+      final s = c.stateDisplay;
+      map[s] = (map[s] ?? 0) + 1;
+    }
+    return map;
+  }
+
+  Map<String, int> get complaintsCountByDistrict {
+    final Map<String, int> map = {};
+    for (var c in _complaints) {
+      final d = c.districtDisplay;
+      map[d] = (map[d] ?? 0) + 1;
+    }
+    return map;
+  }
+
+  List<Complaint> complaintsForDistrict(String district, [String? state]) {
+    final cleanDist = district.trim().toLowerCase();
+    final cleanSt = state?.trim().toLowerCase();
+    return _complaints.where((c) {
+      final cd = c.districtDisplay.toLowerCase();
+      final cs = c.stateDisplay.toLowerCase();
+      final distMatch = cd == cleanDist || cd.contains(cleanDist) || cleanDist.contains(cd);
+      if (!distMatch) return false;
+      if (cleanSt != null && cleanSt.isNotEmpty) {
+        return cs == cleanSt || cs.contains(cleanSt);
+      }
+      return true;
+    }).toList();
+  }
+
+  List<Complaint> complaintsForRepairTeam(String repairTeamId) {
+    final cleanId = repairTeamId.trim().toLowerCase();
+    return _complaints.where((c) => (c.repairTeamId ?? '').toLowerCase() == cleanId).toList();
+  }
+
+  List<Complaint> filteredComplaintsForDistrict(String district, [String? state]) {
+    final base = complaintsForDistrict(district, state);
+    return _applyDistrictFilters(base);
+  }
+
+  List<Complaint> get adminFilteredComplaints {
+    List<Complaint> list = _complaints;
+    if (_selectedStateFilter != null && _selectedStateFilter!.isNotEmpty && _selectedStateFilter != 'All') {
+      list = list.where((c) => c.stateDisplay.toLowerCase() == _selectedStateFilter!.toLowerCase()).toList();
+    }
+    if (_selectedDistrictFilter != null && _selectedDistrictFilter!.isNotEmpty && _selectedDistrictFilter != 'All') {
+      list = list.where((c) => c.districtDisplay.toLowerCase() == _selectedDistrictFilter!.toLowerCase()).toList();
+    }
+    return _applyDistrictFilters(list);
+  }
+
+  List<Complaint> _applyDistrictFilters(List<Complaint> input) {
+    return input.where((c) {
+      final matchesSearch = _searchQuery.isEmpty ||
+          c.title.toLowerCase().contains(_searchQuery.toLowerCase()) ||
+          c.complaintId.toLowerCase().contains(_searchQuery.toLowerCase()) ||
+          c.address.toLowerCase().contains(_searchQuery.toLowerCase()) ||
+          c.districtDisplay.toLowerCase().contains(_searchQuery.toLowerCase());
+      if (!matchesSearch) return false;
+
+      // Status
+      if (_selectedFilter == 'Pending Verification') {
+        if (!(c.status == 'Submitted' || c.status == 'Under Verification')) return false;
+      } else if (_selectedFilter == 'Emergency') {
+        if (!(c.isEmergency && c.status != 'Completed' && c.status != 'Rejected')) return false;
+      } else if (_selectedFilter == 'Accepted') {
+        if (!(c.status == 'Accepted' || c.status == 'Work Started' || c.status == 'Repair In Progress')) return false;
+      } else if (_selectedFilter == 'Completed') {
+        if (!(c.status == 'Completed')) return false;
+      }
+
+      // Category
+      if (_selectedCategoryFilter != 'All') {
+        if (c.category.toLowerCase() != _selectedCategoryFilter.toLowerCase()) return false;
+      }
+
+      // Severity
+      if (_selectedSeverityFilter != 'All') {
+        if (c.severity.toLowerCase() != _selectedSeverityFilter.toLowerCase()) return false;
+      }
+
+      return true;
+    }).toList();
+  }
+
+  // Filtered complaints for Community User (defaults to full list with query and tab filter)
   List<Complaint> get filteredComplaints {
     return _complaints.where((c) {
       final matchesSearch = c.title.toLowerCase().contains(_searchQuery.toLowerCase()) ||
@@ -702,6 +825,9 @@ class ComplaintProvider extends ChangeNotifier with WidgetsBindingObserver {
     required String address,
     required String imageUrl,
     double gpsAccuracy = 5.0,
+    String? state,
+    String? district,
+    String? city,
   }) async {
     _isLoading = true;
     notifyListeners();
@@ -764,6 +890,9 @@ class ComplaintProvider extends ChangeNotifier with WidgetsBindingObserver {
         userId: reporterId,
         severity: severity,
         status: 'Submitted',
+        state: state,
+        district: district,
+        city: city,
       );
 
       if (supabaseRecord != null) {
@@ -811,6 +940,11 @@ class ComplaintProvider extends ChangeNotifier with WidgetsBindingObserver {
         ? (SupabaseService.parseTimestamptz(supabaseRecord!['created_at']) ?? now)
         : now;
 
+    final detectedGeo = IndiaDistricts.detectFromAddress(address);
+    final String finalState = state ?? supabaseRecord?['state']?.toString() ?? detectedGeo?['state'] ?? 'Tamil Nadu';
+    final String finalDistrict = district ?? supabaseRecord?['district']?.toString() ?? detectedGeo?['district'] ?? 'Kanchipuram';
+    final String finalCity = city ?? supabaseRecord?['city']?.toString() ?? finalDistrict;
+
     final newComplaint = Complaint(
       complaintId: complaintId,
       reporterId: reporterId,
@@ -826,6 +960,9 @@ class ComplaintProvider extends ChangeNotifier with WidgetsBindingObserver {
       imageUrl: finalImg,
       beforeImageUrl: finalImg,
       status: finalStatus,
+      state: finalState,
+      district: finalDistrict,
+      city: finalCity,
       createdAt: finalCreatedAt,
     );
 
@@ -843,15 +980,136 @@ class ComplaintProvider extends ChangeNotifier with WidgetsBindingObserver {
         await SupabaseService.triggerStatusNotification(
           complaint: newComplaint,
           status: 'Submitted',
-          targetReportId: supabaseRecord?['id']?.toString(),
-          targetReporterUserId: supabaseRecord?['user_id']?.toString() ?? reporterId,
         );
-      } catch (errNotif) {
-        debugPrint('Notice triggering notification for complaint submission: $errNotif');
-      }
+      } catch (_) {}
     }
 
     return newComplaint;
+  }
+
+  // ============================================================
+  // DISTRICT & REPAIR TEAM MANAGEMENT METHODS
+  // ============================================================
+
+  /// Assign an eligible complaint to a local Repair Team
+  Future<bool> assignComplaintToRepairTeam({
+    required String complaintId,
+    required String repairTeamId,
+    required String repairTeamName,
+    required String assignedByUserId,
+  }) async {
+    final success = SupabaseService.isConnected
+        ? await SupabaseService.assignComplaintToRepairTeam(
+            complaintId: complaintId,
+            repairTeamId: repairTeamId,
+            repairTeamName: repairTeamName,
+            assignedByUserId: assignedByUserId,
+          )
+        : true;
+
+    final idx = _complaints.indexWhere((c) => c.complaintId.toLowerCase() == complaintId.toLowerCase());
+    if (idx != -1) {
+      final updated = _complaints[idx].copyWith(
+        status: 'Accepted',
+        repairTeamId: repairTeamId,
+        repairTeamName: repairTeamName,
+        assignedToRepairTeamAt: DateTime.now(),
+      );
+      _complaints[idx] = updated;
+      await _saveComplaintsToStorage();
+      notifyListeners();
+
+      // Trigger notification for assignment
+      try {
+        await SupabaseService.triggerStatusNotification(
+          complaint: updated,
+          status: 'Accepted',
+          progressNote: 'Assigned to repair team: $repairTeamName',
+        );
+      } catch (_) {}
+    }
+    return success;
+  }
+
+  /// Update or correct a complaint's assigned District
+  Future<bool> updateComplaintDistrict({
+    required String complaintId,
+    required String state,
+    required String district,
+    String? city,
+  }) async {
+    final success = SupabaseService.isConnected
+        ? await SupabaseService.updateComplaintDistrict(
+            complaintId: complaintId,
+            state: state,
+            district: district,
+            city: city,
+          )
+        : true;
+
+    final idx = _complaints.indexWhere((c) => c.complaintId.toLowerCase() == complaintId.toLowerCase());
+    if (idx != -1) {
+      _complaints[idx] = _complaints[idx].copyWith(
+        state: state,
+        district: district,
+        city: city,
+      );
+      await _saveComplaintsToStorage();
+      notifyListeners();
+    }
+    return success;
+  }
+
+  /// Fetch Repair Teams across districts with filtering
+  Future<List<RepairTeam>> fetchRepairTeams({String? state, String? district}) async {
+    return SupabaseService.fetchRepairTeams(state: state, district: district);
+  }
+
+  /// Create a new local Repair Team
+  Future<bool> createRepairTeam(RepairTeam team) async {
+    final res = await SupabaseService.createRepairTeam(team);
+    notifyListeners();
+    return res;
+  }
+
+  /// Update an existing Repair Team
+  Future<bool> updateRepairTeam(RepairTeam team) async {
+    final res = await SupabaseService.updateRepairTeam(team);
+    notifyListeners();
+    return res;
+  }
+
+  /// Fetch Community Users across India or filtered by state/district
+  Future<List<Map<String, dynamic>>> fetchCommunityUsers({String? state, String? district}) async {
+    return SupabaseService.fetchCommunityUsers(state: state, district: district);
+  }
+
+  /// Admin: Assign a Community User to a specific state and district
+  Future<bool> assignCommunityUserDistrict({
+    required String userId,
+    required String state,
+    required String district,
+  }) async {
+    final res = await SupabaseService.assignCommunityUserDistrict(
+      userId: userId,
+      state: state,
+      district: district,
+    );
+    notifyListeners();
+    return res;
+  }
+
+  /// Admin: Activate or deactivate a Community User
+  Future<bool> setCommunityUserActiveStatus({
+    required String userId,
+    required bool isActive,
+  }) async {
+    final res = await SupabaseService.setCommunityUserActiveStatus(
+      userId: userId,
+      isActive: isActive,
+    );
+    notifyListeners();
+    return res;
   }
 
   /// Cast community poll vote (Genuine Issue vs Fake Issue)
@@ -1723,6 +1981,25 @@ class ComplaintProvider extends ChangeNotifier with WidgetsBindingObserver {
               : 'Community Volunteer');
 
       final updateTime = DateTime.now().toUtc();
+      String? effectiveAddress = address;
+      if ((effectiveAddress == null ||
+              effectiveAddress.trim().isEmpty ||
+              effectiveAddress == 'Location' ||
+              effectiveAddress == 'Location Unavailable' ||
+              effectiveAddress.trim().startsWith('Detecting')) &&
+          latitude != null &&
+          longitude != null &&
+          Complaint.isValidCoordinates(latitude, longitude)) {
+        try {
+          final rev = await LocationService.reverseGeocode(latitude, longitude);
+          if (rev.isNotEmpty && !rev.startsWith('Detecting')) {
+            effectiveAddress = rev;
+          }
+        } catch (_) {}
+      }
+
+      final effectiveCaptureTime = capturedAt?.toUtc() ?? updateTime;
+
       final newUpdate = ProgressUpdate(
         updateId: 'UPD-${DateTime.now().millisecondsSinceEpoch}',
         complaintId: current.complaintId,
@@ -1735,8 +2012,8 @@ class ComplaintProvider extends ChangeNotifier with WidgetsBindingObserver {
         createdAt: updateTime,
         latitude: latitude,
         longitude: longitude,
-        address: address,
-        capturedAt: capturedAt?.toUtc(),
+        address: effectiveAddress,
+        capturedAt: effectiveCaptureTime,
       );
 
       final updatedList = Complaint.deduplicateUpdates([...current.updates, newUpdate]);
@@ -1769,8 +2046,8 @@ class ComplaintProvider extends ChangeNotifier with WidgetsBindingObserver {
           allUpdates: updatedList,
           latitude: latitude,
           longitude: longitude,
-          address: address,
-          capturedAt: capturedAt,
+          address: effectiveAddress,
+          capturedAt: effectiveCaptureTime,
           complaint: current,
         );
 

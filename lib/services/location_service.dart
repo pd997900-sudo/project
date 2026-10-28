@@ -4,6 +4,21 @@ import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:geocoding/geocoding.dart' as geo;
 import 'package:http/http.dart' as http;
+import '../models/india_districts.dart';
+
+class LocationResult {
+  final String address;
+  final String state;
+  final String district;
+  final String city;
+
+  LocationResult({
+    required this.address,
+    required this.state,
+    required this.district,
+    required this.city,
+  });
+}
 
 enum LocationStatus {
   initial,
@@ -467,5 +482,79 @@ class LocationService {
     }
 
     return 'Lat: ${lat.toStringAsFixed(5)}°, Long: ${lng.toStringAsFixed(5)}° (PlusCode: $generatedPlusCode)';
+  }
+
+  /// Reverse geocode coordinates into full LocationResult with State, District, City, and Address
+  static Future<LocationResult> reverseGeocodeDetailed(double lat, double lng) async {
+    final address = await reverseGeocode(lat, lng);
+    String detectedState = 'Tamil Nadu';
+    String detectedDistrict = 'Kanchipuram';
+    String detectedCity = 'Sriperumbudur';
+
+    // 1. Try detecting from reverse-geocoded address
+    final fromAddress = IndiaDistricts.detectFromAddress(address);
+    if (fromAddress != null) {
+      detectedState = fromAddress['state'] ?? detectedState;
+      detectedDistrict = fromAddress['district'] ?? detectedDistrict;
+    } else {
+      // 2. Coordinate boundary fallbacks for key Indian metropolitan/industrial zones
+      if (lat >= 12.80 && lat <= 13.20 && lng >= 79.70 && lng <= 80.15) {
+        detectedState = 'Tamil Nadu';
+        detectedDistrict = 'Kanchipuram';
+        detectedCity = 'Sriperumbudur';
+      } else if (lat >= 12.95 && lat <= 13.25 && lng >= 80.15 && lng <= 80.35) {
+        detectedState = 'Tamil Nadu';
+        detectedDistrict = 'Chennai';
+        detectedCity = 'Chennai';
+      } else if (lat >= 13.05 && lat <= 13.40 && lng >= 79.80 && lng <= 80.20) {
+        detectedState = 'Tamil Nadu';
+        detectedDistrict = 'Tiruvallur';
+        detectedCity = 'Tiruvallur';
+      } else if (lat >= 12.80 && lat <= 13.15 && lng >= 77.40 && lng <= 77.75) {
+        detectedState = 'Karnataka';
+        detectedDistrict = 'Bengaluru Urban';
+        detectedCity = 'Bengaluru';
+      } else if (lat >= 18.85 && lat <= 19.30 && lng >= 72.75 && lng <= 73.05) {
+        detectedState = 'Maharashtra';
+        detectedDistrict = 'Mumbai City';
+        detectedCity = 'Mumbai';
+      } else if (lat >= 17.25 && lat <= 17.55 && lng >= 78.25 && lng <= 78.60) {
+        detectedState = 'Telangana';
+        detectedDistrict = 'Hyderabad';
+        detectedCity = 'Hyderabad';
+      } else if (lat >= 28.40 && lat <= 28.85 && lng >= 76.90 && lng <= 77.40) {
+        detectedState = 'Delhi';
+        detectedDistrict = 'New Delhi';
+        detectedCity = 'New Delhi';
+      }
+    }
+
+    // Try to extract city from address
+    final lowerAddr = address.toLowerCase();
+    for (var loc in IndiaDistricts.localityMapping.keys) {
+      if (lowerAddr.contains(loc)) {
+        detectedCity = loc[0].toUpperCase() + loc.substring(1);
+        break;
+      }
+    }
+
+    // Standardize district name against IndiaDistricts list
+    final validDistricts = IndiaDistricts.getDistricts(detectedState);
+    final matchIdx = validDistricts.indexWhere((d) => d.toLowerCase() == detectedDistrict.toLowerCase());
+    if (matchIdx != -1) {
+      detectedDistrict = validDistricts[matchIdx];
+    } else {
+      final partialIdx = validDistricts.indexWhere((d) => d.toLowerCase().contains(detectedDistrict.toLowerCase()) || detectedDistrict.toLowerCase().contains(d.toLowerCase()));
+      if (partialIdx != -1) {
+        detectedDistrict = validDistricts[partialIdx];
+      }
+    }
+
+    return LocationResult(
+      address: address,
+      state: detectedState,
+      district: detectedDistrict,
+      city: detectedCity,
+    );
   }
 }

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../../models/complaint_model.dart';
+import '../../models/repair_team_model.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/glass_card.dart';
 import '../../widgets/status_badge.dart';
@@ -210,6 +211,151 @@ class _ComplaintVerificationScreenState extends State<ComplaintVerificationScree
     );
   }
 
+  void _showUnauthorizedDistrictAlert(BuildContext context, String userDistrict, String complaintDistrict) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Row(
+          children: [
+            Icon(Icons.shield_outlined, color: AppTheme.emergencyRed),
+            SizedBox(width: 8),
+            Text('District Restriction', style: TextStyle(fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Text(
+          'This complaint belongs to $complaintDistrict District.\n\nYour account is assigned to $userDistrict District. You can only verify, vote on, or update repair progress for complaints within your assigned jurisdiction.',
+          style: const TextStyle(fontSize: 14),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Understood'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showAssignRepairTeamDialog(BuildContext context, Complaint complaint) async {
+    final complaintProv = Provider.of<ComplaintProvider>(context, listen: false);
+    final authProv = Provider.of<AuthProvider>(context, listen: false);
+    final teams = await complaintProv.fetchRepairTeams(
+      state: complaint.stateDisplay,
+      district: complaint.districtDisplay,
+    );
+
+    if (!mounted) return;
+
+    if (teams.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('No active repair teams found for ${complaint.districtDisplay}. Please contact your Administrator.'),
+          backgroundColor: AppTheme.warningOrange,
+        ),
+      );
+      return;
+    }
+
+    RepairTeam selectedTeam = teams.first;
+
+    showDialog(
+      context: context,
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (ctx, setModalState) {
+          return AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+            title: Row(
+              children: [
+                const Icon(Icons.handyman_rounded, color: AppTheme.primaryDark),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Assign Repair Team (${complaint.complaintId})',
+                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Assigning complaint to local crew in ${complaint.districtDisplay}:',
+                  style: const TextStyle(fontSize: 13, color: Colors.black87),
+                ),
+                const SizedBox(height: 14),
+                DropdownButtonFormField<RepairTeam>(
+                  value: selectedTeam,
+                  decoration: const InputDecoration(labelText: 'Select Repair Team'),
+                  isExpanded: true,
+                  items: teams
+                      .map((t) => DropdownMenuItem(
+                            value: t,
+                            child: Text('${t.name} (${t.specialization})', overflow: TextOverflow.ellipsis),
+                          ))
+                      .toList(),
+                  onChanged: (val) {
+                    if (val != null) {
+                      setModalState(() {
+                        selectedTeam = val;
+                      });
+                    }
+                  },
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Lead: ${selectedTeam.leadName.isNotEmpty ? selectedTeam.leadName : "N/A"}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                      if (selectedTeam.contactPhone.isNotEmpty)
+                        Text('Phone: ${selectedTeam.contactPhone}', style: const TextStyle(fontSize: 12)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogCtx),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primaryDark),
+                onPressed: () async {
+                  Navigator.pop(dialogCtx);
+                  final success = await complaintProv.assignComplaintToRepairTeam(
+                    complaintId: complaint.complaintId,
+                    repairTeamId: selectedTeam.id,
+                    repairTeamName: selectedTeam.name,
+                    assignedByUserId: authProv.currentUser?.id ?? 'community_lead',
+                  );
+
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(success ? 'Assigned to ${selectedTeam.name}!' : 'Failed to assign repair team'),
+                        backgroundColor: success ? AppTheme.successGreen : AppTheme.emergencyRed,
+                      ),
+                    );
+                  }
+                },
+                child: const Text('Confirm Assignment', style: TextStyle(color: Colors.white)),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final auth = Provider.of<AuthProvider>(context);
@@ -251,6 +397,18 @@ class _ComplaintVerificationScreenState extends State<ComplaintVerificationScree
     final isAcceptedOrInProgress = complaint.status == 'Accepted' ||
         complaint.status == 'Work Started' ||
         complaint.status == 'Repair In Progress';
+
+    final userRole = (auth.currentUser?.role ?? auth.selectedRole).toLowerCase();
+    final isAdmin = userRole == 'admin' || auth.isAdmin;
+    final userDistrict = auth.userDistrict.trim().toLowerCase();
+    final complaintDistrict = complaint.districtDisplay.trim().toLowerCase();
+
+    // Check district authorization
+    final isAuthorizedDistrict = isAdmin ||
+        userDistrict.isEmpty ||
+        complaintDistrict.isEmpty ||
+        complaintDistrict == userDistrict ||
+        complaint.address.toLowerCase().contains(userDistrict);
 
     return Scaffold(
       appBar: AppBar(
@@ -312,6 +470,62 @@ class _ComplaintVerificationScreenState extends State<ComplaintVerificationScree
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // District Notice Banner (if out-of-district) or Jurisdiction Tag
+              if (!isAuthorizedDistrict)
+                Container(
+                  margin: const EdgeInsets.only(bottom: 16),
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: Colors.amber.shade50,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: Colors.amber.shade300, width: 1.2),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(Icons.info_outline, color: Color(0xFFB45309), size: 22),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Out-of-District Complaint (Read-Only Mode)',
+                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFF78350F)),
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              'This complaint belongs to ${complaint.districtDisplay} (${complaint.stateDisplay}). Your account is assigned to ${auth.userDistrict}. Only authorized Community Users of ${complaint.districtDisplay} or India-Level Admins can verify or update this report.',
+                              style: const TextStyle(fontSize: 12, color: Color(0xFF78350F)),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              else
+                Container(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.blue.shade200),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.location_on_rounded, size: 14, color: Colors.blue),
+                      const SizedBox(width: 6),
+                      Text(
+                        'Jurisdiction: ${complaint.districtDisplay}, ${complaint.stateDisplay}',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.blue.shade900),
+                      ),
+                    ],
+                  ),
+                ),
+
               // Photo Header Card
               ClipRRect(
                 borderRadius: BorderRadius.circular(20),
@@ -789,6 +1003,10 @@ class _ComplaintVerificationScreenState extends State<ComplaintVerificationScree
                   height: 52,
                   child: ElevatedButton.icon(
                     onPressed: () {
+                      if (!isAuthorizedDistrict) {
+                        _showUnauthorizedDistrictAlert(context, auth.userDistrict, complaint.districtDisplay);
+                        return;
+                      }
                       Navigator.push(
                         context,
                         MaterialPageRoute(
@@ -808,6 +1026,32 @@ class _ComplaintVerificationScreenState extends State<ComplaintVerificationScree
                         'Update Work Progress & Upload Photos',
                         style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
                       ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: OutlinedButton.icon(
+                    onPressed: () {
+                      if (!isAuthorizedDistrict) {
+                        _showUnauthorizedDistrictAlert(context, auth.userDistrict, complaint.districtDisplay);
+                        return;
+                      }
+                      _showAssignRepairTeamDialog(context, complaint);
+                    },
+                    icon: const Icon(Icons.handyman_rounded, size: 18),
+                    label: Text(
+                      complaint.repairTeamName != null && complaint.repairTeamName!.isNotEmpty
+                          ? 'Assigned Crew: ${complaint.repairTeamName} (Change)'
+                          : 'Assign to Local Repair Crew',
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.teal.shade800,
+                      side: BorderSide(color: Colors.teal.shade800),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                     ),
                   ),
                 ),
@@ -851,6 +1095,10 @@ class _ComplaintVerificationScreenState extends State<ComplaintVerificationScree
                   height: 52,
                   child: ElevatedButton.icon(
                     onPressed: () async {
+                      if (!isAuthorizedDistrict) {
+                        _showUnauthorizedDistrictAlert(context, auth.userDistrict, complaint.districtDisplay);
+                        return;
+                      }
                       if (_isVerifying || _isMarkingFake || _isAccepting || complaint.isRejected) return;
 
                       final messenger = ScaffoldMessenger.of(context);
@@ -920,6 +1168,32 @@ class _ComplaintVerificationScreenState extends State<ComplaintVerificationScree
                     ),
                   ),
                 ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: ElevatedButton.icon(
+                    onPressed: () {
+                      if (!isAuthorizedDistrict) {
+                        _showUnauthorizedDistrictAlert(context, auth.userDistrict, complaint.districtDisplay);
+                        return;
+                      }
+                      _showAssignRepairTeamDialog(context, complaint);
+                    },
+                    icon: const Icon(Icons.handyman_rounded, size: 18),
+                    label: Text(
+                      complaint.repairTeamName != null && complaint.repairTeamName!.isNotEmpty
+                          ? 'Assigned Crew: ${complaint.repairTeamName} (Change)'
+                          : 'Assign to Local Repair Crew',
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.teal.shade700,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    ),
+                  ),
+                ),
               ] else ...[
                 // STEP 1: Unverified (Submitted / Under Verification) -> Show "Verify" & "Mark Fake" Buttons
                 Row(
@@ -928,6 +1202,10 @@ class _ComplaintVerificationScreenState extends State<ComplaintVerificationScree
                     Expanded(
                       child: ElevatedButton.icon(
                         onPressed: () async {
+                          if (!isAuthorizedDistrict) {
+                            _showUnauthorizedDistrictAlert(context, auth.userDistrict, complaint.districtDisplay);
+                            return;
+                          }
                           final stopwatch = Stopwatch()..start();
                           final currentUserId = auth.currentUser?.id ?? 'anon_community_user';
 
@@ -1022,6 +1300,10 @@ class _ComplaintVerificationScreenState extends State<ComplaintVerificationScree
                     Expanded(
                       child: OutlinedButton.icon(
                         onPressed: () async {
+                          if (!isAuthorizedDistrict) {
+                            _showUnauthorizedDistrictAlert(context, auth.userDistrict, complaint.districtDisplay);
+                            return;
+                          }
                           if (_isVerifying || _isMarkingFake || _isAccepting) return;
 
                           final messenger = ScaffoldMessenger.of(context);

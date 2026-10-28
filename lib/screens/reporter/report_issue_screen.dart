@@ -11,6 +11,7 @@ import '../../widgets/map_view_widget.dart';
 import '../../widgets/real_time_camera_dialog.dart';
 import '../../widgets/photo_edit_insert_dialog.dart';
 import '../../models/complaint_model.dart';
+import '../../models/india_districts.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/complaint_provider.dart';
 import 'complaint_tracking_screen.dart';
@@ -35,6 +36,9 @@ class _ReportIssueScreenState extends State<ReportIssueScreen> {
   double? _selectedLat;
   double? _selectedLng;
   String? _selectedAddress;
+  String? _selectedState = 'Tamil Nadu';
+  String? _selectedDistrict = 'Kanchipuram';
+  String? _selectedCity;
 
   // Photo GPS location metadata
   double? _photoLat;
@@ -46,6 +50,85 @@ class _ReportIssueScreenState extends State<ReportIssueScreen> {
   bool _isLocationConfirmed = false;
   bool _isSubmitting = false;
   String? _locationErrorMessage;
+
+  void _showEditDistrictDialog() {
+    String curState = _selectedState ?? 'Tamil Nadu';
+    String curDistrict = _selectedDistrict ?? 'Kanchipuram';
+    final states = IndiaDistricts.states;
+    List<String> districts = IndiaDistricts.getDistricts(curState);
+    if (!districts.contains(curDistrict)) {
+      curDistrict = districts.first;
+    }
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (dialogCtx, setModalState) {
+          return AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: const Row(
+              children: [
+                Icon(Icons.location_city_rounded, color: AppTheme.primaryDark),
+                SizedBox(width: 8),
+                Text('Select District', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              ],
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                DropdownButtonFormField<String>(
+                  value: curState,
+                  decoration: const InputDecoration(labelText: 'State'),
+                  isExpanded: true,
+                  items: states.map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
+                  onChanged: (val) {
+                    if (val != null) {
+                      setModalState(() {
+                        curState = val;
+                        districts = IndiaDistricts.getDistricts(curState);
+                        curDistrict = districts.first;
+                      });
+                    }
+                  },
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  value: curDistrict,
+                  decoration: const InputDecoration(labelText: 'District'),
+                  isExpanded: true,
+                  items: districts.map((d) => DropdownMenuItem(value: d, child: Text(d))).toList(),
+                  onChanged: (val) {
+                    if (val != null) {
+                      setModalState(() {
+                        curDistrict = val;
+                      });
+                    }
+                  },
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primaryDark),
+                onPressed: () {
+                  setState(() {
+                    _selectedState = curState;
+                    _selectedDistrict = curDistrict;
+                  });
+                  Navigator.pop(ctx);
+                },
+                child: const Text('Confirm', style: TextStyle(color: Colors.white)),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
 
   final List<String> _categories = [
     'Pothole',
@@ -124,20 +207,23 @@ class _ReportIssueScreenState extends State<ReportIssueScreen> {
       final double lat = position.latitude;
       final double lng = position.longitude;
 
-      final readableAddress = await LocationService.reverseGeocode(lat, lng);
+      final locRes = await LocationService.reverseGeocodeDetailed(lat, lng);
 
       if (mounted) {
         setState(() {
           _selectedLat = lat;
           _selectedLng = lng;
-          _selectedAddress = readableAddress;
+          _selectedAddress = locRes.address;
+          _selectedState = locRes.state;
+          _selectedDistrict = locRes.district;
+          _selectedCity = locRes.city;
           _isDetectingLocation = false;
           _isLocationConfirmed = false;
         });
 
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('GPS location detected: $readableAddress'),
+            content: Text('GPS detected: ${locRes.district}, ${locRes.state}'),
             backgroundColor: AppTheme.successGreen,
           ),
         );
@@ -198,6 +284,16 @@ class _ReportIssueScreenState extends State<ReportIssueScreen> {
                 _selectedLng = geotagLoc.longitude;
                 _selectedAddress = geotagLoc.address;
                 _isLocationConfirmed = true;
+
+                LocationService.reverseGeocodeDetailed(geotagLoc.latitude, geotagLoc.longitude).then((res) {
+                  if (mounted) {
+                    setState(() {
+                      _selectedState = res.state;
+                      _selectedDistrict = res.district;
+                      _selectedCity = res.city;
+                    });
+                  }
+                });
               }
             });
             ScaffoldMessenger.of(context).showSnackBar(
@@ -359,6 +455,9 @@ class _ReportIssueScreenState extends State<ReportIssueScreen> {
         address: _selectedAddress!,
         imageUrl: _capturedImageUrl!,
         gpsAccuracy: _photoAccuracy ?? 5.0,
+        state: _selectedState ?? 'Tamil Nadu',
+        district: _selectedDistrict ?? 'Kanchipuram',
+        city: _selectedCity,
       );
 
       if (mounted) {
@@ -1385,6 +1484,33 @@ class _ReportIssueScreenState extends State<ReportIssueScreen> {
                                     'GPS Verified',
                                     style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: AppTheme.successGreen),
                                   ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            const Divider(height: 1, thickness: 0.5),
+                            const SizedBox(height: 8),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Row(
+                                  children: [
+                                    const Icon(Icons.location_city_rounded, size: 14, color: AppTheme.primaryBlue),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      'District: ${_selectedDistrict ?? "Detecting..."} (${_selectedState ?? ""})',
+                                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppTheme.primaryDark),
+                                    ),
+                                  ],
+                                ),
+                                TextButton(
+                                  style: TextButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                    minimumSize: Size.zero,
+                                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                  ),
+                                  onPressed: _showEditDistrictDialog,
+                                  child: const Text('Change', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
                                 ),
                               ],
                             ),

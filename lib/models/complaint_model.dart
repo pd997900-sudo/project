@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
+import 'india_districts.dart';
 
 class Complaint {
   final String complaintId; // e.g. RW-8902
@@ -22,6 +23,12 @@ class Complaint {
   final String? acceptedByCommunityUser;
   final String? communityUserName;
   final String? completionNotes;
+  final String? state;
+  final String? district;
+  final String? city;
+  final String? repairTeamId;
+  final String? repairTeamName;
+  final DateTime? assignedToRepairTeamAt;
   final DateTime createdAt;
   final DateTime? updatedAt;
   final List<ProgressUpdate> updates;
@@ -54,6 +61,12 @@ class Complaint {
     this.acceptedByCommunityUser,
     this.communityUserName,
     this.completionNotes,
+    this.state,
+    this.district,
+    this.city,
+    this.repairTeamId,
+    this.repairTeamName,
+    this.assignedToRepairTeamAt,
     DateTime? createdAt,
     this.updatedAt,
     List<ProgressUpdate>? updates,
@@ -135,6 +148,30 @@ class Complaint {
   }
 
   bool get hasValidCoordinates => isValidCoordinates(latitude, longitude);
+
+  String get districtDisplay {
+    if (district != null && district!.trim().isNotEmpty) {
+      return district!.trim();
+    }
+    final detected = IndiaDistricts.detectFromAddress(address);
+    if (detected != null && detected['district'] != null) {
+      return detected['district']!;
+    }
+    return 'Kanchipuram';
+  }
+
+  String get stateDisplay {
+    if (state != null && state!.trim().isNotEmpty) {
+      return state!.trim();
+    }
+    final detected = IndiaDistricts.detectFromAddress(address);
+    if (detected != null && detected['state'] != null) {
+      return detected['state']!;
+    }
+    return 'Tamil Nadu';
+  }
+
+  bool get isAssignedToRepairTeam => repairTeamId != null && repairTeamId!.isNotEmpty;
 
   // Poll Getters
   int get totalVotes => realVotes + fakeVotes;
@@ -362,15 +399,45 @@ class Complaint {
       if (!uniqueMap.containsKey(key)) {
         uniqueMap[key] = u;
       } else {
-        // Prefer the row that possesses the authoritative database primary key UUID
+        // Merge updates: retain authoritative database primary key UUID and ensure GPS location is preserved
         final existing = uniqueMap[key]!;
-        if ((existing.id == null || existing.id!.isEmpty) && (u.id != null && u.id!.isNotEmpty)) {
-          uniqueMap[key] = u;
-        } else if (existing.id != null && (u.id == null || u.id!.isEmpty)) {
-          // Keep existing which has DB primary key
-        } else {
-          uniqueMap[key] = u;
-        }
+        final bool uHasCoords = Complaint.isValidCoordinates(u.latitude, u.longitude);
+        final bool existingHasCoords = Complaint.isValidCoordinates(existing.latitude, existing.longitude);
+
+        final String? effectiveId = (existing.id != null && existing.id!.isNotEmpty)
+            ? existing.id
+            : u.id;
+
+        final double? effectiveLat = uHasCoords
+            ? u.latitude
+            : (existingHasCoords ? existing.latitude : null);
+
+        final double? effectiveLng = uHasCoords
+            ? u.longitude
+            : (existingHasCoords ? existing.longitude : null);
+
+        final String? effectiveAddress = (u.address != null &&
+                u.address!.trim().isNotEmpty &&
+                u.address != 'Location' &&
+                u.address != 'Location Unavailable' &&
+                !u.address!.trim().startsWith('Detecting'))
+            ? u.address
+            : existing.address;
+
+        final DateTime? effectiveCapturedAt = u.capturedAt ?? existing.capturedAt;
+
+        // Base update to keep: prefer whichever has DB id, else u
+        final ProgressUpdate base = ((existing.id == null || existing.id!.isEmpty) && (u.id != null && u.id!.isNotEmpty))
+            ? u
+            : existing;
+
+        uniqueMap[key] = base.copyWith(
+          id: effectiveId,
+          latitude: effectiveLat,
+          longitude: effectiveLng,
+          address: effectiveAddress,
+          capturedAt: effectiveCapturedAt,
+        );
       }
     }
     final result = uniqueMap.values.toList();
@@ -465,6 +532,14 @@ class Complaint {
       acceptedByCommunityUser: json['community_user_id']?.toString(),
       communityUserName: json['community_user_name']?.toString(),
       completionNotes: json['completion_notes']?.toString(),
+      state: json['state']?.toString(),
+      district: json['district']?.toString(),
+      city: json['city']?.toString(),
+      repairTeamId: json['repair_team_id']?.toString(),
+      repairTeamName: json['repair_team_name']?.toString(),
+      assignedToRepairTeamAt: json['assigned_to_repair_team_at'] != null
+          ? parseTimestamptz(json['assigned_to_repair_team_at'])
+          : null,
       createdAt: parsedCreatedAt,
       updatedAt: json['updated_at'] != null
           ? DateTime.tryParse(json['updated_at'].toString())
@@ -518,6 +593,12 @@ class Complaint {
       'community_user_id': acceptedByCommunityUser,
       'community_user_name': communityUserName,
       'completion_notes': completionNotes,
+      'state': state,
+      'district': district,
+      'city': city,
+      'repair_team_id': repairTeamId,
+      'repair_team_name': repairTeamName,
+      'assigned_to_repair_team_at': assignedToRepairTeamAt?.toUtc().toIso8601String(),
       'created_at': createdAt.toUtc().toIso8601String(),
       'updated_at': updatedAt?.toUtc().toIso8601String(),
       'updates': updates.map((u) => u.toJson()).toList(),
@@ -550,6 +631,12 @@ class Complaint {
     String? acceptedByCommunityUser,
     String? communityUserName,
     String? completionNotes,
+    String? state,
+    String? district,
+    String? city,
+    String? repairTeamId,
+    String? repairTeamName,
+    DateTime? assignedToRepairTeamAt,
     DateTime? createdAt,
     DateTime? updatedAt,
     List<ProgressUpdate>? updates,
@@ -581,6 +668,12 @@ class Complaint {
       acceptedByCommunityUser: acceptedByCommunityUser ?? this.acceptedByCommunityUser,
       communityUserName: communityUserName ?? this.communityUserName,
       completionNotes: completionNotes ?? this.completionNotes,
+      state: state ?? this.state,
+      district: district ?? this.district,
+      city: city ?? this.city,
+      repairTeamId: repairTeamId ?? this.repairTeamId,
+      repairTeamName: repairTeamName ?? this.repairTeamName,
+      assignedToRepairTeamAt: assignedToRepairTeamAt ?? this.assignedToRepairTeamAt,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt ?? DateTime.now(),
       updates: updates != null ? deduplicateUpdates(updates) : this.updates,
@@ -645,6 +738,14 @@ class ProgressUpdate {
       textUpdateId = rawId;
     }
 
+    double? lat = Complaint.parseNullableDouble(json['latitude'] ?? json['lat']);
+    double? lng = Complaint.parseNullableDouble(json['longitude'] ?? json['lng'] ?? json['lon']);
+    if (lat != null && lng != null && lat.abs() > 90.0 && lng.abs() <= 90.0) {
+      final temp = lat;
+      lat = lng;
+      lng = temp;
+    }
+
     return ProgressUpdate(
       id: dbId,
       updateId: textUpdateId,
@@ -658,8 +759,8 @@ class ProgressUpdate {
       createdAt: json['created_at'] != null
           ? (Complaint.parseTimestamptz(json['created_at']) ?? DateTime.now().toUtc())
           : DateTime.now().toUtc(),
-      latitude: Complaint.parseNullableDouble(json['latitude']),
-      longitude: Complaint.parseNullableDouble(json['longitude']),
+      latitude: lat,
+      longitude: lng,
       address: json['address']?.toString(),
       capturedAt: json['captured_at'] != null
           ? Complaint.parseTimestamptz(json['captured_at'])

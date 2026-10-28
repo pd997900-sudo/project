@@ -8,6 +8,7 @@ import '../../providers/complaint_provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/chat_provider.dart';
 import '../../services/supabase_service.dart';
+import '../../services/location_service.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/glass_card.dart';
 import '../../widgets/status_badge.dart';
@@ -281,19 +282,23 @@ class _ComplaintTrackingScreenState extends State<ComplaintTrackingScreen> {
     String? address,
     DateTime? capturedAt,
   }) {
-    final bool hasValidCoords = lat != null && lat != 0.0 && lng != null && lng != 0.0;
+    final bool hasValidCoords = Complaint.isValidCoordinates(lat, lng);
     String displayAddress = 'Location unavailable';
-    if (address != null && address.trim().isNotEmpty && address.trim() != 'Location Unavailable' && address.trim() != 'Location') {
+    if (address != null &&
+        address.trim().isNotEmpty &&
+        address.trim() != 'Location Unavailable' &&
+        address.trim() != 'Location' &&
+        !address.trim().startsWith('Detecting')) {
       displayAddress = address.trim();
     } else if (hasValidCoords) {
-      displayAddress = 'Lat: ${lat.toStringAsFixed(5)}°, Long: ${lng.toStringAsFixed(5)}°';
+      displayAddress = 'Lat: ${lat!.toStringAsFixed(5)}°, Long: ${lng!.toStringAsFixed(5)}°';
     }
 
     final String coordString = hasValidCoords
-        ? 'Lat: ${lat.toStringAsFixed(6)}°, Long: ${lng.toStringAsFixed(6)}°'
+        ? 'Lat: ${lat!.toStringAsFixed(6)}°, Long: ${lng!.toStringAsFixed(6)}°'
         : 'Coordinates unavailable';
 
-    // Requirement 4 & 5: Format actual photo capture timestamp in IST (Asia/Kolkata, UTC+05:30).
+    // Format actual photo capture timestamp in IST (Asia/Kolkata, UTC+05:30).
     // If unavailable, show "Capture time unavailable". Do not invent a timestamp.
     String? captureDateString;
     String? captureTimeString;
@@ -306,234 +311,254 @@ class _ComplaintTrackingScreenState extends State<ComplaintTrackingScreen> {
 
     showDialog(
       context: context,
-      builder: (context) {
-        final screenHeight = MediaQuery.of(context).size.height;
+      builder: (dialogCtx) {
+        final screenHeight = MediaQuery.of(dialogCtx).size.height;
+        String dynamicAddress = displayAddress;
 
-        return Dialog(
-          backgroundColor: Colors.transparent,
-          insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-          child: Container(
-            constraints: BoxConstraints(
-              maxHeight: screenHeight * 0.90,
-              maxWidth: 540,
-            ),
-            decoration: BoxDecoration(
-              color: const Color(0xFF0F172A),
-              borderRadius: BorderRadius.circular(20),
-              boxShadow: const [
-                BoxShadow(color: Colors.black54, blurRadius: 24, spreadRadius: 6),
-              ],
-            ),
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // 1. Fixed Header with title and accessible close button
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Expanded(
-                      child: Row(
-                        children: [
-                          const Icon(Icons.center_focus_strong_rounded, color: AppTheme.primaryBlue, size: 20),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              title,
-                              style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close, color: Colors.white),
-                      onPressed: () => Navigator.pop(context),
-                      tooltip: 'Close',
-                    ),
+        return StatefulBuilder(
+          builder: (stfContext, setDialogState) {
+            if (hasValidCoords &&
+                (dynamicAddress == 'Location unavailable' || dynamicAddress.startsWith('Lat:'))) {
+              LocationService.reverseGeocode(lat!, lng!).then((resolved) {
+                if (resolved.isNotEmpty &&
+                    !resolved.startsWith('Detecting') &&
+                    !resolved.startsWith('Lat:') &&
+                    resolved != 'Location Unavailable' &&
+                    stfContext.mounted) {
+                  setDialogState(() {
+                    dynamicAddress = resolved;
+                  });
+                }
+              }).catchError((_) {});
+            }
+
+            return Dialog(
+              backgroundColor: Colors.transparent,
+              insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+              child: Container(
+                constraints: BoxConstraints(
+                  maxHeight: screenHeight * 0.90,
+                  maxWidth: 540,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0F172A),
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: const [
+                    BoxShadow(color: Colors.black54, blurRadius: 24, spreadRadius: 6),
                   ],
                 ),
-                const SizedBox(height: 10),
-
-                // 2. Responsive scrollable body to prevent overflow on any screen height
-                Flexible(
-                  child: SingleChildScrollView(
-                    physics: const BouncingScrollPhysics(),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // 1. Fixed Header with title and accessible close button
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        // Photo display with interactive pinch/zoom
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(16),
-                          child: Container(
-                            constraints: BoxConstraints(
-                              maxHeight: screenHeight * 0.42,
-                            ),
-                            color: Colors.black26,
-                            child: InteractiveViewer(
-                              maxScale: 4.0,
-                              minScale: 1.0,
-                              child: Center(
-                                child: _buildDamageImage(imageUrl, fit: BoxFit.contain),
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        const Center(
-                          child: Text(
-                            '🔍 Pinch or scroll to zoom in photo',
-                            style: TextStyle(color: Colors.white54, fontSize: 11),
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-
-                        // Requirement 3: Metadata card under the photo
-                        Container(
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.08),
-                            borderRadius: BorderRadius.circular(14),
-                            border: Border.all(color: Colors.white12),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                        Expanded(
+                          child: Row(
                             children: [
-                              // GPS Location Address
-                              Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Icon(
-                                    Icons.location_on_rounded,
-                                    size: 16,
-                                    color: hasValidCoords ? AppTheme.emergencyRed : Colors.grey,
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          'GPS Location',
-                                          style: TextStyle(
-                                            color: Colors.white.withOpacity(0.6),
-                                            fontSize: 10,
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 2),
-                                        Text(
-                                          displayAddress,
-                                          style: const TextStyle(
-                                            color: Colors.white,
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const Divider(color: Colors.white12, height: 16),
-
-                              // Coordinates: Latitude and Longitude
-                              Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Icon(
-                                    Icons.my_location_rounded,
-                                    size: 15,
-                                    color: hasValidCoords ? AppTheme.primaryBlue : Colors.grey,
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          'Coordinates',
-                                          style: TextStyle(
-                                            color: Colors.white.withOpacity(0.6),
-                                            fontSize: 10,
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 2),
-                                        Text(
-                                          coordString,
-                                          style: TextStyle(
-                                            color: Colors.white.withOpacity(0.9),
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.w500,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const Divider(color: Colors.white12, height: 16),
-
-                              // Photo Capture Date and Time in IST
-                              Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Icon(
-                                    Icons.access_time_rounded,
-                                    size: 15,
-                                    color: Colors.amberAccent,
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          'Capture Date & Time (IST)',
-                                          style: TextStyle(
-                                            color: Colors.white.withOpacity(0.6),
-                                            fontSize: 10,
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 2),
-                                        if (capturedAt != null)
-                                          Text(
-                                            '$captureDateString • $captureTimeString',
-                                            style: TextStyle(
-                                              color: Colors.white.withOpacity(0.9),
-                                              fontSize: 12,
-                                              fontWeight: FontWeight.w500,
-                                            ),
-                                          )
-                                        else
-                                          const Text(
-                                            'Capture time unavailable',
-                                            style: TextStyle(
-                                              color: Colors.white60,
-                                              fontSize: 12,
-                                              fontStyle: FontStyle.italic,
-                                            ),
-                                          ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
+                              const Icon(Icons.center_focus_strong_rounded, color: AppTheme.primaryBlue, size: 20),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  title,
+                                  style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                               ),
                             ],
                           ),
                         ),
+                        IconButton(
+                          icon: const Icon(Icons.close, color: Colors.white),
+                          onPressed: () => Navigator.pop(dialogCtx),
+                          tooltip: 'Close',
+                        ),
                       ],
                     ),
-                  ),
+                    const SizedBox(height: 10),
+
+                    // 2. Responsive scrollable body to prevent overflow on any screen height
+                    Flexible(
+                      child: SingleChildScrollView(
+                        physics: const BouncingScrollPhysics(),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            // Photo display with interactive pinch/zoom
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(16),
+                              child: Container(
+                                constraints: BoxConstraints(
+                                  maxHeight: screenHeight * 0.42,
+                                ),
+                                color: Colors.black26,
+                                child: InteractiveViewer(
+                                  maxScale: 4.0,
+                                  minScale: 1.0,
+                                  child: Center(
+                                    child: _buildDamageImage(imageUrl, fit: BoxFit.contain),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            const Center(
+                              child: Text(
+                                '🔍 Pinch or scroll to zoom in photo',
+                                style: TextStyle(color: Colors.white54, fontSize: 11),
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+
+                            // Requirement 3: Metadata card under the photo
+                            Container(
+                              padding: const EdgeInsets.all(14),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.08),
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(color: Colors.white12),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  // GPS Location Address
+                                  Row(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Icon(
+                                        Icons.location_on_rounded,
+                                        size: 16,
+                                        color: hasValidCoords ? AppTheme.emergencyRed : Colors.grey,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              'GPS Location',
+                                              style: TextStyle(
+                                                color: Colors.white.withOpacity(0.6),
+                                                fontSize: 10,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              dynamicAddress,
+                                              style: const TextStyle(
+                                                color: Colors.white,
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const Divider(color: Colors.white12, height: 16),
+
+                                  // Coordinates: Latitude and Longitude
+                                  Row(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Icon(
+                                        Icons.my_location_rounded,
+                                        size: 15,
+                                        color: hasValidCoords ? AppTheme.primaryBlue : Colors.grey,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              'Coordinates',
+                                              style: TextStyle(
+                                                color: Colors.white.withOpacity(0.6),
+                                                fontSize: 10,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              coordString,
+                                              style: TextStyle(
+                                                color: Colors.white.withOpacity(0.9),
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w500,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const Divider(color: Colors.white12, height: 16),
+
+                                  // Photo Capture Date and Time in IST
+                                  Row(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      const Icon(
+                                        Icons.access_time_rounded,
+                                        size: 15,
+                                        color: Colors.amberAccent,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              'Capture Date & Time (IST)',
+                                              style: TextStyle(
+                                                color: Colors.white.withOpacity(0.6),
+                                                fontSize: 10,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 2),
+                                            if (capturedAt != null)
+                                              Text(
+                                                '$captureDateString • $captureTimeString',
+                                                style: TextStyle(
+                                                  color: Colors.white.withOpacity(0.9),
+                                                  fontSize: 12,
+                                                  fontWeight: FontWeight.w500,
+                                                ),
+                                              )
+                                            else
+                                              const Text(
+                                                'Capture time unavailable',
+                                                style: TextStyle(
+                                                  color: Colors.white60,
+                                                  fontSize: 12,
+                                                  fontStyle: FontStyle.italic,
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-              ],
-            ),
-          ),
+              ),
+            );
+          },
         );
       },
     );
@@ -881,6 +906,57 @@ class _ComplaintTrackingScreenState extends State<ComplaintTrackingScreen> {
                         ),
                       ],
                     ),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.18),
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(color: Colors.white30),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.location_city_rounded, size: 12, color: Colors.amberAccent),
+                              const SizedBox(width: 4),
+                              Text(
+                                '${complaint.districtDisplay}, ${complaint.stateDisplay}',
+                                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (complaint.repairTeamName != null && complaint.repairTeamName!.isNotEmpty) ...[
+                          const SizedBox(width: 8),
+                          Flexible(
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: Colors.tealAccent.withOpacity(0.2),
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(color: Colors.tealAccent.withOpacity(0.4)),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(Icons.handyman_rounded, size: 12, color: Colors.tealAccent),
+                                  const SizedBox(width: 4),
+                                  Flexible(
+                                    child: Text(
+                                      'Crew: ${complaint.repairTeamName}',
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
                     const SizedBox(height: 14),
 
                     // Progress percentage bar
@@ -1033,6 +1109,18 @@ class _ComplaintTrackingScreenState extends State<ComplaintTrackingScreen> {
                             : null;
 
                         final bool hasAfterPhoto = isCompleted && afterImg != null && afterImg.isNotEmpty;
+                        ProgressUpdate? afterUpdate;
+                        if (hasAfterPhoto) {
+                          try {
+                            afterUpdate = complaint.updates.firstWhere(
+                              (u) => u.imageUrl == afterImg,
+                            );
+                          } catch (_) {}
+                          afterUpdate ??= complaint.updates.cast<ProgressUpdate?>().lastWhere(
+                            (u) => u?.imageUrl != null && u!.imageUrl!.isNotEmpty,
+                            orElse: () => null,
+                          );
+                        }
 
                         return InkWell(
                           onTap: hasAfterPhoto
@@ -1041,6 +1129,15 @@ class _ComplaintTrackingScreenState extends State<ComplaintTrackingScreen> {
                                     context,
                                     afterImg,
                                     'AFTER REPAIR PHOTO (${complaint.complaintId})',
+                                    lat: afterUpdate?.latitude ?? complaint.latitude,
+                                    lng: afterUpdate?.longitude ?? complaint.longitude,
+                                    address: (afterUpdate?.address != null &&
+                                            afterUpdate!.address!.trim().isNotEmpty &&
+                                            afterUpdate.address != 'Location Unavailable' &&
+                                            afterUpdate.address != 'Location')
+                                        ? afterUpdate.address
+                                        : complaint.address,
+                                    capturedAt: afterUpdate?.capturedAt ?? afterUpdate?.createdAt ?? complaint.updatedAt,
                                   );
                                 }
                               : null,
@@ -1150,8 +1247,12 @@ class _ComplaintTrackingScreenState extends State<ComplaintTrackingScreen> {
                   list.sort((a, b) => a.createdAt.compareTo(b.createdAt));
                   return list;
                 })().map((u) {
-                  final bool hasLoc = u.latitude != null && u.latitude != 0.0 && u.longitude != null && u.longitude != 0.0;
-                  final String locAddr = (u.address != null && u.address!.isNotEmpty && u.address != 'Location')
+                  final bool hasLoc = Complaint.isValidCoordinates(u.latitude, u.longitude);
+                  final String locAddr = (u.address != null &&
+                          u.address!.trim().isNotEmpty &&
+                          u.address != 'Location' &&
+                          u.address != 'Location Unavailable' &&
+                          !u.address!.startsWith('Detecting'))
                       ? u.address!
                       : (hasLoc ? 'Lat: ${u.latitude!.toStringAsFixed(4)}°, Long: ${u.longitude!.toStringAsFixed(4)}°' : 'Location unavailable');
 

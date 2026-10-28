@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/glass_card.dart';
 import '../../widgets/status_badge.dart';
+import '../../providers/auth_provider.dart';
 import '../../providers/complaint_provider.dart';
 import 'complaint_verification_screen.dart';
 
@@ -79,9 +80,12 @@ class _ComplaintListScreenState extends State<ComplaintListScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final authProv = Provider.of<AuthProvider>(context);
     final complaintProv = Provider.of<ComplaintProvider>(context);
+    final userDistrict = authProv.userDistrict;
+    final userState = authProv.userState;
     final selectedFilter = complaintProv.selectedFilter;
-    final complaintsList = complaintProv.filteredComplaints;
+    final complaintsList = complaintProv.filteredComplaintsForDistrict(userDistrict, userState);
 
     return Scaffold(
       appBar: AppBar(
@@ -95,7 +99,13 @@ class _ComplaintListScreenState extends State<ComplaintListScreen> {
             }
           },
         ),
-        title: const Text('Community Complaints Feed'),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Community Feed', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            Text('📍 $userDistrict District, $userState', style: const TextStyle(fontSize: 11, color: Colors.white70)),
+          ],
+        ),
       ),
       body: Container(
         decoration: AppTheme.mainScreenBackground,

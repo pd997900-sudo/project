@@ -3,10 +3,14 @@ class UserModel {
   final String name;
   final String email;
   final String phone;
-  final String role; // 'reporter' or 'community'
+  final String role; // 'reporter', 'community', 'admin', 'repair_team'
   final String? avatarUrl;
   final bool isVerified;
   final DateTime createdAt;
+  final String? state;
+  final String? district;
+  final String? repairTeamId;
+  final bool isActive;
 
   UserModel({
     required this.id,
@@ -17,10 +21,16 @@ class UserModel {
     this.avatarUrl,
     this.isVerified = true,
     DateTime? createdAt,
+    this.state,
+    this.district,
+    this.repairTeamId,
+    this.isActive = true,
   }) : createdAt = createdAt ?? DateTime.now();
 
   bool get isReporter => role.toLowerCase() == 'reporter';
   bool get isCommunity => role.toLowerCase() == 'community';
+  bool get isAdmin => role.toLowerCase() == 'admin';
+  bool get isRepairTeam => role.toLowerCase() == 'repair_team' || role.toLowerCase() == 'repair';
 
   bool get hasValidName {
     final n = name.trim();
@@ -46,6 +56,10 @@ class UserModel {
       createdAt: json['created_at'] != null
           ? DateTime.parse(json['created_at'])
           : DateTime.now(),
+      state: json['state']?.toString(),
+      district: json['district']?.toString(),
+      repairTeamId: json['repair_team_id']?.toString(),
+      isActive: json['is_active'] == null ? true : (json['is_active'] == true || json['is_active'].toString() == 'true'),
     );
   }
 
@@ -59,6 +73,10 @@ class UserModel {
       'avatar_url': avatarUrl,
       'is_verified': isVerified,
       'created_at': createdAt.toIso8601String(),
+      'state': state,
+      'district': district,
+      'repair_team_id': repairTeamId,
+      'is_active': isActive,
     };
   }
 
@@ -69,6 +87,10 @@ class UserModel {
     String? role,
     String? avatarUrl,
     bool? isVerified,
+    String? state,
+    String? district,
+    String? repairTeamId,
+    bool? isActive,
   }) {
     return UserModel(
       id: id,
@@ -79,6 +101,10 @@ class UserModel {
       avatarUrl: avatarUrl ?? this.avatarUrl,
       isVerified: isVerified ?? this.isVerified,
       createdAt: createdAt,
+      state: state ?? this.state,
+      district: district ?? this.district,
+      repairTeamId: repairTeamId ?? this.repairTeamId,
+      isActive: isActive ?? this.isActive,
     );
   }
 }

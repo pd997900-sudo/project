@@ -8,6 +8,8 @@ import '../../providers/auth_provider.dart';
 import '../../providers/complaint_provider.dart';
 import '../reporter/reporter_main_screen.dart';
 import '../community/community_main_screen.dart';
+import '../admin/admin_main_screen.dart';
+import '../repair_team/repair_team_main_screen.dart';
 import 'sign_up_screen.dart';
 import 'forgot_password_screen.dart';
 
@@ -151,12 +153,19 @@ class _SignInScreenState extends State<SignInScreen> {
       // Ensure complaints, votes, and feedbacks are refreshed with authenticated credentials
       Provider.of<ComplaintProvider>(context, listen: false).refreshComplaints();
 
+      Widget destination;
+      if (actualRole == 'admin') {
+        destination = const AdminMainScreen();
+      } else if (actualRole == 'repair_team') {
+        destination = const RepairTeamMainScreen();
+      } else if (isReporter) {
+        destination = const ReporterMainScreen();
+      } else {
+        destination = const CommunityMainScreen();
+      }
+
       Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(
-          builder: (_) => isReporter
-              ? const ReporterMainScreen()
-              : const CommunityMainScreen(),
-        ),
+        MaterialPageRoute(builder: (_) => destination),
         (route) => false,
       );
     } else {
@@ -204,6 +213,8 @@ class _SignInScreenState extends State<SignInScreen> {
   Widget build(BuildContext context) {
     final authProvider = Provider.of<AuthProvider>(context);
     final activeRole = _getActiveRole(authProvider);
+    final isAdmin = activeRole == 'admin';
+    final isRepairTeam = activeRole == 'repair_team';
     final isReporter = activeRole == 'reporter';
 
     final savedAccounts = authProvider.getAvailableSavedAccounts(activeRole);
@@ -253,86 +264,154 @@ class _SignInScreenState extends State<SignInScreen> {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  'Sign in as ${isReporter ? "Reporter" : "Community Volunteer"}',
+                  isAdmin
+                      ? 'India-Level Central Administrator'
+                      : isRepairTeam
+                          ? 'District Local Repair Crew'
+                          : 'Sign in as ${isReporter ? "Reporter" : "Community Volunteer"}',
                   style: TextStyle(
-                    color: Colors.white.withOpacity(0.8),
+                    color: Colors.white.withOpacity(0.85),
                     fontSize: 16,
                   ),
                 ),
                 const SizedBox(height: 18),
 
-                // Role Toggle Selector Segment
-                Container(
-                  padding: const EdgeInsets.all(4),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: GestureDetector(
-                          onTap: () {
-                            if (authProvider.selectedRole != 'reporter') {
-                              authProvider.setSelectedRole('reporter');
-                              setState(() {
-                                _selectedAccountEmail = null;
-                                _isHoveringSuggestions = false;
-                              });
-                            }
+                // Role Toggle or Portal Indicator
+                if (isAdmin)
+                  Container(
+                    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 14),
+                    decoration: BoxDecoration(
+                      color: Colors.amber.shade400.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: Colors.amber.shade300, width: 1),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.shield_rounded, color: Colors.amberAccent, size: 20),
+                        const SizedBox(width: 8),
+                        const Text(
+                          '🇮🇳 Central Admin Portal',
+                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                        ),
+                        const Spacer(),
+                        TextButton(
+                          onPressed: () {
+                            authProvider.setSelectedRole('reporter');
+                            setState(() {
+                              _selectedAccountEmail = null;
+                              _isHoveringSuggestions = false;
+                            });
                           },
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(vertical: 10),
-                            decoration: BoxDecoration(
-                              color: isReporter ? Colors.white : Colors.transparent,
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Center(
-                              child: Text(
-                                'Reporter Portal',
-                                style: TextStyle(
-                                  color: isReporter ? AppTheme.primaryDark : Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 13,
+                          child: const Text('Exit Portal', style: TextStyle(color: Colors.amberAccent, fontSize: 12, fontWeight: FontWeight.bold)),
+                        ),
+                      ],
+                    ),
+                  )
+                else if (isRepairTeam)
+                  Container(
+                    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 14),
+                    decoration: BoxDecoration(
+                      color: Colors.teal.shade400.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: Colors.teal.shade300, width: 1),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.handyman_rounded, color: Colors.tealAccent, size: 20),
+                        const SizedBox(width: 8),
+                        const Text(
+                          '🛠️ Local Repair Crew Portal',
+                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                        ),
+                        const Spacer(),
+                        TextButton(
+                          onPressed: () {
+                            authProvider.setSelectedRole('community');
+                            setState(() {
+                              _selectedAccountEmail = null;
+                              _isHoveringSuggestions = false;
+                            });
+                          },
+                          child: const Text('Exit Portal', style: TextStyle(color: Colors.tealAccent, fontSize: 12, fontWeight: FontWeight.bold)),
+                        ),
+                      ],
+                    ),
+                  )
+                else
+                  // Standard Role Toggle Selector Segment
+                  Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: GestureDetector(
+                            onTap: () {
+                              if (authProvider.selectedRole != 'reporter') {
+                                authProvider.setSelectedRole('reporter');
+                                setState(() {
+                                  _selectedAccountEmail = null;
+                                  _isHoveringSuggestions = false;
+                                });
+                              }
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(vertical: 10),
+                              decoration: BoxDecoration(
+                                color: isReporter ? Colors.white : Colors.transparent,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Center(
+                                child: Text(
+                                  'Reporter Portal',
+                                  style: TextStyle(
+                                    color: isReporter ? AppTheme.primaryDark : Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 13,
+                                  ),
                                 ),
                               ),
                             ),
                           ),
                         ),
-                      ),
-                      Expanded(
-                        child: GestureDetector(
-                          onTap: () {
-                            if (authProvider.selectedRole != 'community') {
-                              authProvider.setSelectedRole('community');
-                              setState(() {
-                                _selectedAccountEmail = null;
-                                _isHoveringSuggestions = false;
-                              });
-                            }
-                          },
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(vertical: 10),
-                            decoration: BoxDecoration(
-                              color: !isReporter ? Colors.white : Colors.transparent,
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Center(
-                              child: Text(
-                                'Community Portal',
-                                style: TextStyle(
-                                  color: !isReporter ? AppTheme.primaryDark : Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 13,
+                        Expanded(
+                          child: GestureDetector(
+                            onTap: () {
+                              if (authProvider.selectedRole != 'community') {
+                                authProvider.setSelectedRole('community');
+                                setState(() {
+                                  _selectedAccountEmail = null;
+                                  _isHoveringSuggestions = false;
+                                });
+                              }
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(vertical: 10),
+                              decoration: BoxDecoration(
+                                color: !isReporter ? Colors.white : Colors.transparent,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Center(
+                                child: Text(
+                                  'Community Portal',
+                                  style: TextStyle(
+                                    color: !isReporter ? AppTheme.primaryDark : Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 13,
+                                  ),
                                 ),
                               ),
                             ),
                           ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
                 const SizedBox(height: 20),
 
                 // Glass Form Container
@@ -635,35 +714,43 @@ class _SignInScreenState extends State<SignInScreen> {
                 const SizedBox(height: 24),
 
                 // Link to Sign Up
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      "Don't have an account? ",
-                      style: TextStyle(color: Colors.white.withOpacity(0.8)),
-                    ),
-                    GestureDetector(
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => SignUpScreen(
-                              portalRole: _getActiveRole(authProvider),
+                if (!isAdmin && !isRepairTeam)
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        "Don't have an account? ",
+                        style: TextStyle(color: Colors.white.withOpacity(0.8)),
+                      ),
+                      GestureDetector(
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => SignUpScreen(
+                                portalRole: _getActiveRole(authProvider),
+                              ),
                             ),
+                          );
+                        },
+                        child: const Text(
+                          'Sign Up',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            decoration: TextDecoration.underline,
                           ),
-                        );
-                      },
-                      child: const Text(
-                        'Sign Up',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          decoration: TextDecoration.underline,
                         ),
                       ),
+                    ],
+                  )
+                else
+                  Center(
+                    child: Text(
+                      'Official staff credentials are provisioned by Administration.',
+                      style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 12),
                     ),
-                  ],
-                ),
+                  ),
               ],
             ),
           ),

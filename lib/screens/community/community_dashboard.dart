@@ -88,12 +88,16 @@ class _CommunityDashboardState extends State<CommunityDashboard> {
     final complaintProv = Provider.of<ComplaintProvider>(context);
     final user = auth.currentUser;
 
-    final total = complaintProv.totalCount;
-    final emergency = complaintProv.emergencyCount;
-    final accepted = complaintProv.complaints.where((c) => c.status == 'Accepted' || c.status == 'Work Started' || c.status == 'Repair In Progress').length;
-    final completed = complaintProv.completedCount;
+    final userDistrict = auth.userDistrict;
+    final userState = auth.userState;
+    final districtComplaints = complaintProv.complaintsForDistrict(userDistrict, userState);
 
-    final urgentItems = complaintProv.complaints.where((c) => c.isEmergency && c.status != 'Completed' && c.status != 'Rejected').toList();
+    final total = districtComplaints.length;
+    final emergency = districtComplaints.where((c) => c.isEmergency && c.status != 'Completed' && c.status != 'Rejected').length;
+    final accepted = districtComplaints.where((c) => c.status == 'Accepted' || c.status == 'Work Started' || c.status == 'Repair In Progress').length;
+    final completed = districtComplaints.where((c) => c.status == 'Completed').length;
+
+    final urgentItems = districtComplaints.where((c) => c.isEmergency && c.status != 'Completed' && c.status != 'Rejected').toList();
 
     return Container(
       decoration: AppTheme.mainScreenBackground,
@@ -176,6 +180,68 @@ class _CommunityDashboardState extends State<CommunityDashboard> {
                     ),
                   ),
                 ],
+              ),
+
+              // Assigned District Jurisdiction Banner
+              Container(
+                margin: const EdgeInsets.only(top: 16, bottom: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [const Color(0xFF0F172A), Colors.blue.shade900],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.08),
+                      blurRadius: 8,
+                      offset: const Offset(0, 3),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.amberAccent.withOpacity(0.2),
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.amberAccent.withOpacity(0.4)),
+                      ),
+                      child: const Icon(Icons.location_on_rounded, color: Colors.amberAccent, size: 20),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'ASSIGNED JURISDICTION',
+                            style: TextStyle(color: Colors.amberAccent, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.8),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            '$userDistrict District, $userState',
+                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        '$total in District',
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
+                      ),
+                    ),
+                  ],
+                ),
               ),
 
               const SizedBox(height: 20),

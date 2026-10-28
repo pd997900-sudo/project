@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/complaint_model.dart';
 import '../models/notification_model.dart';
+import '../models/india_districts.dart';
+import '../models/repair_team_model.dart';
 
 class StatusNotificationResult {
   final bool success;
@@ -566,8 +568,8 @@ class SupabaseService {
               .maybeSingle();
           if (upRes != null && upRes['role'] != null) {
             final r = upRes['role'].toString().trim().toLowerCase();
-            if (r == 'reporter' || r == 'community') {
-              dbRole = r;
+            if (r == 'reporter' || r == 'community' || r == 'admin' || r == 'repair_team' || r == 'repair') {
+              dbRole = (r == 'repair') ? 'repair_team' : r;
             }
           }
         } catch (_) {}
@@ -584,8 +586,8 @@ class SupabaseService {
       final user = currentUser;
       if (user != null && (user.id == userId || (email != null && user.email?.toLowerCase() == email.trim().toLowerCase()))) {
         final metaRole = user.userMetadata?['role']?.toString().trim().toLowerCase();
-        if (metaRole == 'reporter' || metaRole == 'community') {
-          return metaRole;
+        if (metaRole == 'reporter' || metaRole == 'community' || metaRole == 'admin' || metaRole == 'repair_team' || metaRole == 'repair') {
+          return (metaRole == 'repair') ? 'repair_team' : metaRole;
         }
       }
 
@@ -597,7 +599,9 @@ class SupabaseService {
             final item = rpcRes.first;
             if (item is Map && item['is_registered'] == true) {
               final r = item['user_role']?.toString().trim().toLowerCase();
-              if (r == 'reporter' || r == 'community') return r;
+              if (r == 'reporter' || r == 'community' || r == 'admin' || r == 'repair_team' || r == 'repair') {
+                return (r == 'repair') ? 'repair_team' : r;
+              }
             }
           }
         } catch (_) {}
@@ -687,6 +691,9 @@ class SupabaseService {
     required String role,
     String? name,
     String? phone,
+    String? state,
+    String? district,
+    String? repairTeamId,
   }) async {
     try {
       if (!isConnected || userId.isEmpty) return;
@@ -714,7 +721,7 @@ class SupabaseService {
         try {
           final existingUserProfile = await client!
               .from('user_profiles')
-              .select('user_id, full_name, role')
+              .select('user_id, full_name, role, state, district')
               .eq('user_id', userId)
               .maybeSingle();
 
@@ -722,8 +729,8 @@ class SupabaseService {
             nameToSave ??= _extractNameFromProfileMap(existingUserProfile);
             if (existingUserProfile['role'] != null) {
               final r = existingUserProfile['role'].toString().trim().toLowerCase();
-              if (r == 'reporter' || r == 'community') {
-                dbRole = r;
+              if (r == 'reporter' || r == 'community' || r == 'admin' || r == 'repair_team' || r == 'repair') {
+                dbRole = (r == 'repair') ? 'repair_team' : r;
               }
             }
           }
@@ -738,10 +745,17 @@ class SupabaseService {
           }
 
           // Preserve existing role: only set role if not already defined in user_profiles
-          if (dbRole == null && (cleanRole == 'reporter' || cleanRole == 'community')) {
-            upsertData['role'] = cleanRole;
-            dbRole = cleanRole;
+          final effectiveRole = (cleanRole == 'repair') ? 'repair_team' : cleanRole;
+          if (dbRole == null && (effectiveRole == 'reporter' || effectiveRole == 'community' || effectiveRole == 'admin' || effectiveRole == 'repair_team')) {
+            upsertData['role'] = effectiveRole;
+            dbRole = effectiveRole;
           }
+
+          if (state != null && state.isNotEmpty) upsertData['state'] = state;
+          if (district != null && district.isNotEmpty) upsertData['district'] = district;
+          if (repairTeamId != null && repairTeamId.isNotEmpty) upsertData['repair_team_id'] = repairTeamId;
+          if (phone != null && phone.isNotEmpty) upsertData['phone'] = phone;
+          if (email.isNotEmpty) upsertData['email'] = email;
 
           if (upsertData.containsKey('full_name') || upsertData.containsKey('role')) {
             await client!.from('user_profiles').upsert(
@@ -1436,7 +1450,7 @@ class SupabaseService {
           final inserted = await client!
               .from('progress_updates')
               .insert(updateRecord)
-              .select('id, update_id')
+              .select('id, update_id, latitude, longitude, address, captured_at')
               .timeout(const Duration(seconds: 8));
           debugPrint('✅ Progress update inserted into progress_updates table: $inserted');
           if (inserted.isNotEmpty) {
@@ -1446,7 +1460,7 @@ class SupabaseService {
         } on PostgrestException catch (e) {
           debugPrint('Notice inserting into progress_updates table: ${e.message} (${e.code})');
           progressError = e.message;
-          // Retry with core schema columns in case optional columns (latitude, longitude, etc.) are absent
+          // Retry with core schema columns in case optional columns are absent
           try {
             final coreRecord = <String, dynamic>{
               'update_id': updateRecord['update_id'],
@@ -1458,13 +1472,17 @@ class SupabaseService {
               'work_percentage': workPercentage,
               'status': status,
               'created_at': updateRecord['created_at'],
+              if (updateRecord['latitude'] != null) 'latitude': updateRecord['latitude'],
+              if (updateRecord['longitude'] != null) 'longitude': updateRecord['longitude'],
+              if (updateRecord['address'] != null) 'address': updateRecord['address'],
+              if (updateRecord['captured_at'] != null) 'captured_at': updateRecord['captured_at'],
             };
             final retryRes = await client!
                 .from('progress_updates')
                 .insert(coreRecord)
-                .select('id, update_id')
+                .select('id, update_id, latitude, longitude, address, captured_at')
                 .timeout(const Duration(seconds: 8));
-            debugPrint('✅ Progress update inserted into progress_updates table with core columns: $retryRes');
+            debugPrint('✅ Progress update inserted into progress_updates table with retry: $retryRes');
             if (retryRes.isNotEmpty) {
               updateRecord['id'] = retryRes.first['id']?.toString();
             }
@@ -1514,7 +1532,7 @@ class SupabaseService {
               .from(reportsTableName)
               .update(reportUpdateData)
               .eq('id', complaintId)
-              .select('id, user_id, complaint_id, title')
+              .select('id, user_id, issue_type')
               .timeout(const Duration(seconds: 8));
           if (res.isNotEmpty) {
             debugPrint('✅ Updated report status & progress in reports table by id: $complaintId');
@@ -1526,22 +1544,22 @@ class SupabaseService {
         }
       }
 
-      // 2b. If not updated by id, try updating reports by 'complaint_id'
+      // 2b. If not updated by id, try updating reports by 'complaint_id' if present, or by id
       if (!reportTableSaved) {
         try {
           final res = await client!
               .from(reportsTableName)
               .update(reportUpdateData)
-              .eq('complaint_id', complaintId)
-              .select('id, user_id, complaint_id, title')
+              .eq('id', complaintId)
+              .select('id, user_id, issue_type')
               .timeout(const Duration(seconds: 8));
           if (res.isNotEmpty) {
-            debugPrint('✅ Updated report status in reports table by complaint_id: $complaintId');
+            debugPrint('✅ Updated report status in reports table by id: $complaintId');
             reportTableSaved = true;
             savedReportRow = res.first;
           }
         } catch (e2) {
-          debugPrint('Notice updating report by complaint_id: $e2');
+          debugPrint('Notice updating report by id: $e2');
         }
       }
 
@@ -1560,7 +1578,7 @@ class SupabaseService {
         }
         if (_isValidUuid(complaintId)) {
           try {
-            final res = await client!.from(reportsTableName).update(fallbackData).eq('id', complaintId).select('id, user_id, complaint_id, title').timeout(const Duration(seconds: 8));
+            final res = await client!.from(reportsTableName).update(fallbackData).eq('id', complaintId).select('id, user_id, issue_type').timeout(const Duration(seconds: 8));
             if (res.isNotEmpty) {
               reportTableSaved = true;
               savedReportRow = res.first;
@@ -1569,7 +1587,7 @@ class SupabaseService {
         }
         if (!reportTableSaved) {
           try {
-            final res = await client!.from(reportsTableName).update(fallbackData).eq('complaint_id', complaintId).select('id, user_id, complaint_id, title').timeout(const Duration(seconds: 8));
+            final res = await client!.from(reportsTableName).update(fallbackData).eq('id', complaintId).select('id, user_id, issue_type').timeout(const Duration(seconds: 8));
             if (res.isNotEmpty) {
               reportTableSaved = true;
               savedReportRow = res.first;
@@ -1589,14 +1607,9 @@ class SupabaseService {
               : '88deb318-8c4b-48fd-8915-52fbc04ed6dd';
           final fullReportData = <String, dynamic>{
             'id': targetUuid,
-            'complaint_id': complaint.complaintId,
             'user_id': targetReporterId,
-            'reporter_name': complaint.reporterName,
-            'reporter_phone': complaint.reporterPhone,
-            'title': complaint.title,
             'description': complaint.description,
             'issue_type': complaint.category,
-            'category': complaint.category,
             'severity': complaint.severity,
             'latitude': complaint.latitude,
             'longitude': complaint.longitude,
@@ -1610,15 +1623,14 @@ class SupabaseService {
             'after_image_url': (workPercentage >= 95.0) ? (imageUrl ?? complaint.afterImageUrl) : complaint.afterImageUrl,
             'captured_at': complaint.createdAt.toUtc().toIso8601String(),
             'created_at': complaint.createdAt.toUtc().toIso8601String(),
-            'updated_at': DateTime.now().toUtc().toIso8601String(),
             'updates': updatesJsonList,
           };
-          final upsertRes = await client!.from(reportsTableName).upsert(fullReportData).select('id, user_id, complaint_id, title').maybeSingle().timeout(const Duration(seconds: 8), onTimeout: () => null);
+          final upsertRes = await client!.from(reportsTableName).upsert(fullReportData).select('id, user_id, issue_type').maybeSingle().timeout(const Duration(seconds: 8), onTimeout: () => null);
           debugPrint('✅ Upserted complaint $complaintId with progress into reports table: $upsertRes');
           reportTableSaved = true;
           savedReportRow = upsertRes;
         } catch (eUpsert) {
-          debugPrint('Notice upserting report into reports table: $eUpsert');
+          debugPrint('Notice upserting complaint with progress: $eUpsert');
         }
       }
 
@@ -2722,6 +2734,9 @@ class SupabaseService {
     required String userId,
     required String severity,
     String status = 'Submitted',
+    String? state,
+    String? district,
+    String? city,
   }) async {
     try {
       if (!isConnected) {
@@ -2751,6 +2766,18 @@ class SupabaseService {
 
       final actualUserId = rawUserId;
 
+      // Detect state and district if not explicitly provided
+      final detected = IndiaDistricts.detectFromAddress(address);
+      final finalState = (state != null && state.trim().isNotEmpty)
+          ? state.trim()
+          : (detected?['state'] ?? 'Tamil Nadu');
+      final finalDistrict = (district != null && district.trim().isNotEmpty)
+          ? district.trim()
+          : (detected?['district'] ?? 'Kanchipuram');
+      final finalCity = (city != null && city.trim().isNotEmpty)
+          ? city.trim()
+          : (detected?['district'] ?? 'Sriperumbudur');
+
       debugPrint('========================================');
       debugPrint('CREATING ROADWATCH REPORT');
       debugPrint('========================================');
@@ -2762,6 +2789,7 @@ class SupabaseService {
       debugPrint('Latitude: $latitude');
       debugPrint('Longitude: $longitude');
       debugPrint('Address: $address');
+      debugPrint('State: $finalState | District: $finalDistrict | City: $finalCity');
 
       final reportData = {
         'image_url': imageUrl,
@@ -2775,6 +2803,9 @@ class SupabaseService {
         'user_id': actualUserId,
         'severity': severity,
         'status': status,
+        'state': finalState,
+        'district': finalDistrict,
+        'city': finalCity,
       };
 
       debugPrint('----------------------------------------');
@@ -2782,20 +2813,39 @@ class SupabaseService {
       debugPrint('$reportData');
       debugPrint('----------------------------------------');
 
-      final response = await client!
-          .from(reportsTableName)
-          .insert(reportData)
-          .select()
-          .single();
+      Map<String, dynamic>? responseData;
+      try {
+        final response = await client!
+            .from(reportsTableName)
+            .insert(reportData)
+            .select()
+            .single();
+        responseData = Map<String, dynamic>.from(response);
+      } catch (insertErr) {
+        debugPrint('Insert with district/state had error, falling back to basic fields: $insertErr');
+        final basicReportData = Map<String, dynamic>.from(reportData)
+          ..remove('state')
+          ..remove('district')
+          ..remove('city');
+        final response = await client!
+            .from(reportsTableName)
+            .insert(basicReportData)
+            .select()
+            .single();
+        responseData = Map<String, dynamic>.from(response);
+        responseData['state'] = finalState;
+        responseData['district'] = finalDistrict;
+        responseData['city'] = finalCity;
+      }
 
       debugPrint('========================================');
       debugPrint('✅ ROAD REPORT SAVED TO SUPABASE');
       debugPrint('========================================');
 
       debugPrint('Database Response:');
-      debugPrint('$response');
+      debugPrint('$responseData');
 
-      return Map<String, dynamic>.from(response);
+      return responseData;
     } on PostgrestException catch (e) {
       debugPrint('========================================');
       debugPrint('❌ SUPABASE REPORT INSERT FAILED');
@@ -4484,5 +4534,261 @@ class SupabaseService {
       success: true,
       notificationId: notificationId,
     );
+  }
+
+  // ============================================================
+  // DISTRICT-WISE COMMUNITY & REPAIR TEAM MANAGEMENT METHODS
+  // ============================================================
+
+  static List<RepairTeam> get fallbackRepairTeams => [
+    RepairTeam(
+      id: 'a0000001-0000-0000-0000-000000000001',
+      name: 'Kanchipuram Rapid Pothole Squad',
+      state: 'Tamil Nadu',
+      district: 'Kanchipuram',
+      specialization: 'Pothole Patching & Asphalt Repair',
+      leadName: 'R. Murugan',
+      contactPhone: '+91 98401 22345',
+      contactEmail: 'kanchi.repair@roadwatch.org',
+    ),
+    RepairTeam(
+      id: 'a0000002-0000-0000-0000-000000000002',
+      name: 'Sriperumbudur Highway Maintenance Unit',
+      state: 'Tamil Nadu',
+      district: 'Kanchipuram',
+      specialization: 'Heavy Road & Highway Repairs',
+      leadName: 'K. Saravanan',
+      contactPhone: '+91 98402 33456',
+      contactEmail: 'sriperumbudur.highway@roadwatch.org',
+    ),
+    RepairTeam(
+      id: 'a0000003-0000-0000-0000-000000000003',
+      name: 'Chennai Central Quick-Fix Road Crew',
+      state: 'Tamil Nadu',
+      district: 'Chennai',
+      specialization: 'Urban Pothole & Surface Leveling',
+      leadName: 'S. Arumugam',
+      contactPhone: '+91 98403 44567',
+      contactEmail: 'chennai.roadfix@roadwatch.org',
+    ),
+    RepairTeam(
+      id: 'a0000004-0000-0000-0000-000000000004',
+      name: 'Tiruvallur Road & Drainage Brigade',
+      state: 'Tamil Nadu',
+      district: 'Tiruvallur',
+      specialization: 'Drainage, Potholes & Shoulder Works',
+      leadName: 'V. Natarajan',
+      contactPhone: '+91 98404 55678',
+      contactEmail: 'tiruvallur.repair@roadwatch.org',
+    ),
+    RepairTeam(
+      id: 'a0000005-0000-0000-0000-000000000005',
+      name: 'Bengaluru Urban Asphalt Response Team',
+      state: 'Karnataka',
+      district: 'Bengaluru Urban',
+      specialization: 'Asphalt Patching & Water-logged Roads',
+      leadName: 'M. Venkatesh',
+      contactPhone: '+91 98801 66789',
+      contactEmail: 'bengaluru.asphalt@roadwatch.org',
+    ),
+    RepairTeam(
+      id: 'a0000006-0000-0000-0000-000000000006',
+      name: 'Mumbai Metro Pothole Action Squad',
+      state: 'Maharashtra',
+      district: 'Mumbai City',
+      specialization: 'Monsoon Pothole Repair & Cold Mix',
+      leadName: 'P. Shinde',
+      contactPhone: '+91 98201 77890',
+      contactEmail: 'mumbai.pothole@roadwatch.org',
+    ),
+  ];
+
+  /// Fetch user profile details including state, district, active status, repair team
+  static Future<Map<String, dynamic>?> fetchUserProfileDetails(String userId) async {
+    try {
+      if (!isConnected || userId.isEmpty) return null;
+      final res = await client!
+          .from('user_profiles')
+          .select()
+          .eq('user_id', userId)
+          .maybeSingle();
+      if (res != null) {
+        return Map<String, dynamic>.from(res);
+      }
+      return null;
+    } catch (e) {
+      debugPrint('Notice in fetchUserProfileDetails: $e');
+      return null;
+    }
+  }
+
+  /// Fetch Repair Teams across districts with state and district filtering
+  static Future<List<RepairTeam>> fetchRepairTeams({String? state, String? district}) async {
+    if (isConnected) {
+      try {
+        var query = client!.from('repair_teams').select();
+        if (state != null && state.trim().isNotEmpty) {
+          query = query.eq('state', state.trim());
+        }
+        if (district != null && district.trim().isNotEmpty) {
+          query = query.eq('district', district.trim());
+        }
+        final res = await query.order('name');
+        final list = (res as List).map((r) => RepairTeam.fromJson(r)).toList();
+        if (list.isNotEmpty) {
+          return list;
+        }
+      } catch (e) {
+        debugPrint('Notice querying repair_teams table: $e');
+      }
+    }
+
+    // Resilient fallback filtered by state and district
+    return fallbackRepairTeams.where((t) {
+      if (state != null && state.trim().isNotEmpty && t.state.toLowerCase() != state.trim().toLowerCase()) {
+        return false;
+      }
+      if (district != null && district.trim().isNotEmpty && t.district.toLowerCase() != district.trim().toLowerCase()) {
+        return false;
+      }
+      return true;
+    }).toList();
+  }
+
+  /// Create a new local Repair Team in Supabase
+  static Future<bool> createRepairTeam(RepairTeam team) async {
+    try {
+      if (!isConnected) return false;
+      await client!.from('repair_teams').insert(team.toJson());
+      return true;
+    } catch (e) {
+      debugPrint('Error creating repair team: $e');
+      return false;
+    }
+  }
+
+  /// Update an existing Repair Team
+  static Future<bool> updateRepairTeam(RepairTeam team) async {
+    try {
+      if (!isConnected) return false;
+      await client!.from('repair_teams').update(team.toJson()).eq('id', team.id);
+      return true;
+    } catch (e) {
+      debugPrint('Error updating repair team: $e');
+      return false;
+    }
+  }
+
+  /// Assign a complaint to a local Repair Team
+  static Future<bool> assignComplaintToRepairTeam({
+    required String complaintId,
+    required String repairTeamId,
+    required String repairTeamName,
+    required String assignedByUserId,
+  }) async {
+    try {
+      if (!isConnected) return false;
+      final updateData = <String, dynamic>{
+        'repair_team_id': repairTeamId,
+        'repair_team_name': repairTeamName,
+        'assigned_by_user_id': assignedByUserId,
+        'assigned_to_repair_team_at': DateTime.now().toUtc().toIso8601String(),
+        'status': 'Accepted',
+      };
+
+      try {
+        await client!.from(reportsTableName).update(updateData).or('id.eq.$complaintId,complaint_id.eq.$complaintId');
+        return true;
+      } catch (e1) {
+        // Fallback with standard status update if new columns not yet migrated
+        debugPrint('Notice in assignComplaintToRepairTeam: $e1');
+        await client!.from(reportsTableName).update({
+          'status': 'Accepted',
+        }).or('id.eq.$complaintId,complaint_id.eq.$complaintId');
+        return true;
+      }
+    } catch (e) {
+      debugPrint('Error assigning complaint to repair team: $e');
+      return false;
+    }
+  }
+
+  /// Update or correct a complaint's assigned District and State
+  static Future<bool> updateComplaintDistrict({
+    required String complaintId,
+    required String state,
+    required String district,
+    String? city,
+  }) async {
+    try {
+      if (!isConnected) return false;
+      final updateData = <String, dynamic>{
+        'state': state,
+        'district': district,
+      };
+      if (city != null) updateData['city'] = city;
+      await client!.from(reportsTableName).update(updateData).or('id.eq.$complaintId,complaint_id.eq.$complaintId');
+      return true;
+    } catch (e) {
+      debugPrint('Error updating complaint district: $e');
+      return false;
+    }
+  }
+
+  /// Fetch all Community Users across India or filtered by state/district
+  static Future<List<Map<String, dynamic>>> fetchCommunityUsers({String? state, String? district}) async {
+    try {
+      if (!isConnected) return [];
+      var query = client!.from('user_profiles').select().eq('role', 'community');
+      if (state != null && state.trim().isNotEmpty) {
+        query = query.eq('state', state.trim());
+      }
+      if (district != null && district.trim().isNotEmpty) {
+        query = query.eq('district', district.trim());
+      }
+      final res = await query.order('full_name');
+      return List<Map<String, dynamic>>.from(res);
+    } catch (e) {
+      debugPrint('Error fetching community users: $e');
+      return [];
+    }
+  }
+
+  /// Admin method: Assign a Community User to a specific State and District
+  static Future<bool> assignCommunityUserDistrict({
+    required String userId,
+    required String state,
+    required String district,
+  }) async {
+    try {
+      if (!isConnected) return false;
+      await client!.from('user_profiles').update({
+        'state': state,
+        'district': district,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('user_id', userId);
+      return true;
+    } catch (e) {
+      debugPrint('Error assigning district to community user: $e');
+      return false;
+    }
+  }
+
+  /// Admin method: Activate or deactivate a Community User
+  static Future<bool> setCommunityUserActiveStatus({
+    required String userId,
+    required bool isActive,
+  }) async {
+    try {
+      if (!isConnected) return false;
+      await client!.from('user_profiles').update({
+        'is_active': isActive,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('user_id', userId);
+      return true;
+    } catch (e) {
+      debugPrint('Error setting user active status: $e');
+      return false;
+    }
   }
 }

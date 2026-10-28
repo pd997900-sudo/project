@@ -87,25 +87,33 @@ class AuthProvider extends ChangeNotifier {
       final userId = liveUser.id;
       final cleanEmail = (liveUser.email ?? '').trim();
 
-      // Strictly verify user's role from the existing user_profiles database table
+      // Strictly verify user's role and state/district from the existing user_profiles database table
       String? verifiedRole;
       String? verifiedName;
       String? verifiedPhone;
+      String? verifiedState;
+      String? verifiedDistrict;
+      String? verifiedRepairTeamId;
+      bool verifiedIsActive = true;
 
       try {
         final profileRes = await client
             .from('user_profiles')
-            .select('role, full_name, phone')
+            .select('role, full_name, phone, state, district, is_active, repair_team_id')
             .eq('user_id', userId)
             .maybeSingle()
             .timeout(const Duration(seconds: 4));
 
         if (profileRes != null && profileRes['role'] != null) {
           final r = profileRes['role'].toString().trim().toLowerCase();
-          if (r == 'reporter' || r == 'community') {
-            verifiedRole = r;
+          if (r == 'reporter' || r == 'community' || r == 'admin' || r == 'repair_team' || r == 'repair') {
+            verifiedRole = (r == 'repair') ? 'repair_team' : r;
             verifiedName = profileRes['full_name']?.toString().trim();
             verifiedPhone = profileRes['phone']?.toString().trim();
+            verifiedState = profileRes['state']?.toString().trim();
+            verifiedDistrict = profileRes['district']?.toString().trim();
+            verifiedRepairTeamId = profileRes['repair_team_id']?.toString().trim();
+            verifiedIsActive = profileRes['is_active'] == null ? true : (profileRes['is_active'] == true || profileRes['is_active'].toString() == 'true');
           }
         }
 
@@ -113,17 +121,21 @@ class AuthProvider extends ChangeNotifier {
         if (verifiedRole == null && cleanEmail.isNotEmpty) {
           final emailRes = await client
               .from('user_profiles')
-              .select('role, full_name, phone')
+              .select('role, full_name, phone, state, district, is_active, repair_team_id')
               .eq('email', cleanEmail.toLowerCase())
               .maybeSingle()
               .timeout(const Duration(seconds: 4));
 
           if (emailRes != null && emailRes['role'] != null) {
             final r = emailRes['role'].toString().trim().toLowerCase();
-            if (r == 'reporter' || r == 'community') {
-              verifiedRole = r;
+            if (r == 'reporter' || r == 'community' || r == 'admin' || r == 'repair_team' || r == 'repair') {
+              verifiedRole = (r == 'repair') ? 'repair_team' : r;
               verifiedName ??= emailRes['full_name']?.toString().trim();
               verifiedPhone ??= emailRes['phone']?.toString().trim();
+              verifiedState ??= emailRes['state']?.toString().trim();
+              verifiedDistrict ??= emailRes['district']?.toString().trim();
+              verifiedRepairTeamId ??= emailRes['repair_team_id']?.toString().trim();
+              verifiedIsActive = emailRes['is_active'] == null ? true : (emailRes['is_active'] == true || emailRes['is_active'].toString() == 'true');
             }
           }
         }
@@ -131,8 +143,19 @@ class AuthProvider extends ChangeNotifier {
         debugPrint('Notice querying user_profiles during session verification: $e');
       }
 
+      // If account is deactivated, logout and reject session
+      if (!verifiedIsActive) {
+        debugPrint('Account is deactivated. Clearing session.');
+        await SupabaseService.logout();
+        _currentUser = null;
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.remove(_sessionStorageKey);
+        notifyListeners();
+        return false;
+      }
+
       // Do not allow remembered role or arbitrary metadata to bypass database role verification
-      if (verifiedRole == null || (verifiedRole != 'reporter' && verifiedRole != 'community')) {
+      if (verifiedRole == null || (verifiedRole != 'reporter' && verifiedRole != 'community' && verifiedRole != 'admin' && verifiedRole != 'repair_team')) {
         debugPrint('User role could not be verified from user_profiles table. Clearing session.');
         await SupabaseService.logout();
         _currentUser = null;
@@ -174,6 +197,10 @@ class AuthProvider extends ChangeNotifier {
         role: verifiedRole,
         avatarUrl: (userAvatar != null && userAvatar.trim().isNotEmpty) ? userAvatar.trim() : null,
         isVerified: true,
+        state: verifiedState ?? 'Tamil Nadu',
+        district: verifiedDistrict ?? 'Kanchipuram',
+        repairTeamId: verifiedRepairTeamId,
+        isActive: verifiedIsActive,
       );
 
       final prefs = await SharedPreferences.getInstance();
@@ -733,6 +760,12 @@ class AuthProvider extends ChangeNotifier {
   bool get isLoading => _isLoading;
   bool get isAuthenticated => _currentUser != null;
   String? get errorMessage => _errorMessage;
+  bool get isAdmin => _currentUser?.isAdmin ?? (_selectedRole.toLowerCase() == 'admin');
+  bool get isRepairTeam => _currentUser?.isRepairTeam ?? (_selectedRole.toLowerCase() == 'repair_team' || _selectedRole.toLowerCase() == 'repair');
+  bool get isCommunity => _currentUser?.isCommunity ?? (_selectedRole.toLowerCase() == 'community');
+  bool get isReporter => _currentUser?.isReporter ?? (_selectedRole.toLowerCase() == 'reporter');
+  String get userDistrict => _currentUser?.district ?? 'Kanchipuram';
+  String get userState => _currentUser?.state ?? 'Tamil Nadu';
   String? get pendingOtp => _pendingOtp;
   String? get pendingSignInOtp => _pendingSignInOtp;
   String? get pendingResetCode => _pendingResetCode;
@@ -1006,6 +1039,10 @@ class AuthProvider extends ChangeNotifier {
     String? userAvatar;
     String? storedRole;
     String? authExceptionMsg;
+    String? userState;
+    String? userDistrict;
+    String? userRepairTeamId;
+    bool isAccountActive = true;
 
     // 1. PRIMARY AUTHENTICATION VIA SUPABASE AUTH (IF CONNECTED)
     if (SupabaseService.isConnected) {
@@ -1040,13 +1077,43 @@ class AuthProvider extends ChangeNotifier {
           // Validate account role against authoritative profile source
           final metaRole = supaUser.userMetadata?['role']?.toString().trim().toLowerCase();
           final trustedRole = await SupabaseService.fetchUserRole(userId, email: cleanEmail);
-          storedRole = trustedRole ?? (metaRole == 'reporter' || metaRole == 'community' ? metaRole : null);
+          storedRole = trustedRole ?? (metaRole != null && (metaRole == 'reporter' || metaRole == 'community' || metaRole == 'admin' || metaRole == 'repair_team' || metaRole == 'repair') ? (metaRole == 'repair' ? 'repair_team' : metaRole) : null);
 
           // REJECT UNKNOWN / MISSING ROLES - DO NOT SILENTLY DEFAULT TO REPORTER
-          if (storedRole == null || storedRole.isEmpty || (storedRole != 'reporter' && storedRole != 'community')) {
+          if (storedRole == null || storedRole.isEmpty || (storedRole != 'reporter' && storedRole != 'community' && storedRole != 'admin' && storedRole != 'repair_team')) {
             await SupabaseService.logout();
             _isLoading = false;
             _errorMessage = 'Account role is unassigned or invalid (${storedRole ?? "none"}). Please contact support or re-register.';
+            notifyListeners();
+            return false;
+          }
+
+          // Fetch profile details for active status and district
+          final profileDetails = await SupabaseService.fetchUserProfileDetails(userId);
+          isAccountActive = profileDetails?['is_active'] == null ? true : (profileDetails!['is_active'] == true || profileDetails['is_active'].toString() == 'true');
+          if (!isAccountActive) {
+            await SupabaseService.logout();
+            _isLoading = false;
+            _errorMessage = 'This account has been deactivated. Please contact your administrator.';
+            notifyListeners();
+            return false;
+          }
+          userState = profileDetails?['state']?.toString() ?? 'Tamil Nadu';
+          userDistrict = profileDetails?['district']?.toString() ?? 'Kanchipuram';
+          userRepairTeamId = profileDetails?['repair_team_id']?.toString();
+
+          // Portal role check for strict portal isolation
+          if (targetRole == 'reporter' && storedRole != 'reporter' && storedRole != 'admin') {
+            await SupabaseService.logout();
+            _isLoading = false;
+            _errorMessage = 'This account is registered as a Community User. Please sign in through the Community Portal.';
+            notifyListeners();
+            return false;
+          }
+          if (targetRole == 'community' && storedRole != 'community' && storedRole != 'admin') {
+            await SupabaseService.logout();
+            _isLoading = false;
+            _errorMessage = 'This account is registered as a Reporter. Please sign in through the Reporter Portal.';
             notifyListeners();
             return false;
           }
@@ -1187,6 +1254,10 @@ class AuthProvider extends ChangeNotifier {
       role: verifiedRole,
       avatarUrl: (userAvatar != null && userAvatar.trim().isNotEmpty) ? userAvatar.trim() : null,
       isVerified: true,
+      state: userState ?? userData?['state']?.toString() ?? 'Tamil Nadu',
+      district: userDistrict ?? userData?['district']?.toString() ?? 'Kanchipuram',
+      repairTeamId: userRepairTeamId ?? userData?['repair_team_id']?.toString(),
+      isActive: isAccountActive,
     );
 
     // Save or update saved account credentials list based on role-specific rememberMe state
@@ -1623,6 +1694,9 @@ class AuthProvider extends ChangeNotifier {
     }
     notifyListeners();
   }
+
+  /// Alias for logout
+  Future<void> signOut([String? targetRole]) => logout(targetRole);
 
   /// Delete Reporter Account completely from authentication system, storage, memory, and backend
   Future<bool> deleteReporterAccount() async {

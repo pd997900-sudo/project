@@ -175,6 +175,42 @@ class RoleSelectionScreen extends StatelessWidget {
                     );
                   },
                 ),
+
+                const SizedBox(height: 16),
+
+                // Administrative & Crew Portals
+                Center(
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      TextButton.icon(
+                        icon: const Icon(Icons.shield_outlined, size: 15, color: Colors.white70),
+                        label: const Text('Admin Portal', style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w600)),
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const SignInScreen(portalRole: 'admin'),
+                            ),
+                          );
+                        },
+                      ),
+                      Text('•', style: TextStyle(color: Colors.white.withOpacity(0.4))),
+                      TextButton.icon(
+                        icon: const Icon(Icons.handyman_outlined, size: 15, color: Colors.white70),
+                        label: const Text('Repair Crew Portal', style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w600)),
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const SignInScreen(portalRole: 'repair_team'),
+                            ),
+                          );
+                        },
+                      ),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),

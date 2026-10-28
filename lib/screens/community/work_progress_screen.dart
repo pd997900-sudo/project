@@ -161,7 +161,20 @@ class _WorkProgressScreenState extends State<WorkProgressScreen> {
         imageQuality: 80,
       );
       if (picked != null) {
-        final geotagLoc = await _acquireCurrentGpsLocation();
+        var geotagLoc = await _acquireCurrentGpsLocation();
+        if (geotagLoc != null && Complaint.isValidCoordinates(geotagLoc.latitude, geotagLoc.longitude)) {
+          if (geotagLoc.address.isEmpty ||
+              geotagLoc.address == 'Location Unavailable' ||
+              geotagLoc.address == 'Location' ||
+              geotagLoc.address.startsWith('Detecting')) {
+            try {
+              final resolved = await LocationService.reverseGeocode(geotagLoc.latitude, geotagLoc.longitude);
+              if (resolved.isNotEmpty && !resolved.startsWith('Detecting')) {
+                geotagLoc = geotagLoc.copyWith(address: resolved);
+              }
+            } catch (_) {}
+          }
+        }
         final bytes = await picked.readAsBytes();
         final mimeType = picked.mimeType ?? 'image/jpeg';
         final imageUrl = Uri.dataFromBytes(bytes, mimeType: mimeType).toString();
@@ -170,11 +183,19 @@ class _WorkProgressScreenState extends State<WorkProgressScreen> {
             _progressImageUrl = imageUrl;
             _progressGeotagLocation = geotagLoc;
           });
-          _showFeedbackSnackBar(
-            'Live progress photo captured successfully!',
-            backgroundColor: AppTheme.successGreen,
-            duration: const Duration(seconds: 2),
-          );
+          if (geotagLoc != null && Complaint.isValidCoordinates(geotagLoc.latitude, geotagLoc.longitude)) {
+            _showFeedbackSnackBar(
+              'Live progress photo & GPS coordinates captured successfully!',
+              backgroundColor: AppTheme.successGreen,
+              duration: const Duration(seconds: 2),
+            );
+          } else {
+            _showFeedbackSnackBar(
+              'Progress photo captured, but GPS location was unavailable. Please ensure GPS is enabled.',
+              backgroundColor: const Color(0xFFF59E0B),
+              duration: const Duration(seconds: 4),
+            );
+          }
         }
       }
     } catch (e) {
@@ -184,7 +205,6 @@ class _WorkProgressScreenState extends State<WorkProgressScreen> {
       }
     }
   }
-
 
   void _openLiveCameraDialog() {
     showDialog(
@@ -202,16 +222,38 @@ class _WorkProgressScreenState extends State<WorkProgressScreen> {
             loc = await _acquireCurrentGpsLocation();
           }
 
+          if (loc != null && Complaint.isValidCoordinates(loc.latitude, loc.longitude)) {
+            if (loc.address.isEmpty ||
+                loc.address == 'Location Unavailable' ||
+                loc.address == 'Location' ||
+                loc.address.startsWith('Detecting')) {
+              try {
+                final resolved = await LocationService.reverseGeocode(loc.latitude, loc.longitude);
+                if (resolved.isNotEmpty && !resolved.startsWith('Detecting')) {
+                  loc = loc.copyWith(address: resolved);
+                }
+              } catch (_) {}
+            }
+          }
+
           if (mounted) {
             setState(() {
               _progressImageUrl = capturedUrl;
               _progressGeotagLocation = loc;
             });
-            _showFeedbackSnackBar(
-              'Live camera photo captured successfully!',
-              backgroundColor: AppTheme.successGreen,
-              duration: const Duration(seconds: 2),
-            );
+            if (loc != null && Complaint.isValidCoordinates(loc.latitude, loc.longitude)) {
+              _showFeedbackSnackBar(
+                'Live camera photo & GPS coordinates captured successfully!',
+                backgroundColor: AppTheme.successGreen,
+                duration: const Duration(seconds: 2),
+              );
+            } else {
+              _showFeedbackSnackBar(
+                'Live photo captured, but GPS location was unavailable. Please ensure GPS is enabled.',
+                backgroundColor: const Color(0xFFF59E0B),
+                duration: const Duration(seconds: 4),
+              );
+            }
           }
         },
       ),
@@ -437,13 +479,8 @@ class _WorkProgressScreenState extends State<WorkProgressScreen> {
           return;
         }
 
-        // If photo GPS metadata is not yet set, obtain fresh GPS coordinates now
-        if (_progressGeotagLocation == null ||
-            !Complaint.isValidCoordinates(_progressGeotagLocation!.latitude, _progressGeotagLocation!.longitude)) {
-          _progressGeotagLocation = await _acquireCurrentGpsLocation();
-        }
-
-        // Read the captured photo's actual GPS coordinates from the photo's saved geotag metadata/state
+        // Read the captured photo's actual GPS coordinates from the photo's saved geotag metadata/state.
+        // Never substitute the Community user's later/current location for the original photo's captured location.
         final GeotagLocation? photoLocation = _progressGeotagLocation;
         double photoLat = photoLocation?.latitude ?? 0.0;
         double photoLng = photoLocation?.longitude ?? 0.0;
@@ -458,7 +495,7 @@ class _WorkProgressScreenState extends State<WorkProgressScreen> {
 
         if (!hasValidPhotoCoords) {
           if (kDebugMode) {
-            debugPrint('⚠️ [LOCATION REJECTION] Progress photo GPS coordinates missing or invalid: ($photoLat, $photoLng)');
+            debugPrint('⚠️ [LOCATION REJECTION] Progress photo GPS coordinates missing or unavailable: ($photoLat, $photoLng)');
           }
           if (mounted) {
             setState(() {
@@ -467,7 +504,7 @@ class _WorkProgressScreenState extends State<WorkProgressScreen> {
             ScaffoldMessenger.of(context).clearSnackBars();
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
-                content: Text('Progress photo GPS coordinates are missing or invalid. Please ensure location permissions are enabled.'),
+                content: Text('Progress photo GPS coordinates are unavailable. Please ensure location permissions are enabled and capture the photo at the repair site.'),
                 backgroundColor: AppTheme.emergencyRed,
                 duration: Duration(seconds: 4),
               ),
@@ -506,9 +543,24 @@ class _WorkProgressScreenState extends State<WorkProgressScreen> {
           debugPrint('✅ [DEBUG BRANCH: WITHIN 500M] Distance (${photoDistance.toStringAsFixed(1)}m) <= 500.0m. Location valid, proceeding with submission.');
         }
 
+        // Resolve readable address from coordinates if not already present
+        String photoAddress = photoLocation.address;
+        if (photoAddress.isEmpty ||
+            photoAddress == 'Location' ||
+            photoAddress == 'Location Unavailable' ||
+            photoAddress.startsWith('Detecting')) {
+          try {
+            final rev = await LocationService.reverseGeocode(photoLat, photoLng);
+            if (rev.isNotEmpty && !rev.startsWith('Detecting')) {
+              photoAddress = rev;
+            }
+          } catch (_) {}
+        }
+
         submissionLocation = photoLocation.copyWith(
           latitude: photoLat,
           longitude: photoLng,
+          address: photoAddress,
         );
       }
 
@@ -731,18 +783,21 @@ class _WorkProgressScreenState extends State<WorkProgressScreen> {
   }) {
     final double lat = geotagLoc?.latitude ?? latitude ?? 0.0;
     final double lng = geotagLoc?.longitude ?? longitude ?? 0.0;
-    final bool hasValidCoords = lat != 0.0 && lng != 0.0;
+    final bool hasValidCoords = Complaint.isValidCoordinates(lat, lng);
 
     String displayAddress = 'Location unavailable';
     if (geotagLoc?.address != null &&
         geotagLoc!.address.isNotEmpty &&
         geotagLoc.address != 'Location Unavailable' &&
-        geotagLoc.address != 'Detecting live GPS location...') {
+        geotagLoc.address != 'Location' &&
+        geotagLoc.address != 'Detecting live GPS location...' &&
+        !geotagLoc.address.startsWith('Detecting')) {
       displayAddress = geotagLoc.address;
     } else if (address != null &&
         address.isNotEmpty &&
         address != 'Location Unavailable' &&
-        address != 'Location') {
+        address != 'Location' &&
+        !address.startsWith('Detecting')) {
       displayAddress = address;
     } else if (hasValidCoords) {
       displayAddress = 'Lat: ${lat.toStringAsFixed(5)}°, Long: ${lng.toStringAsFixed(5)}°';
@@ -750,110 +805,128 @@ class _WorkProgressScreenState extends State<WorkProgressScreen> {
 
     final String coordString = hasValidCoords
         ? 'Lat: ${lat.toStringAsFixed(6)}°, Long: ${lng.toStringAsFixed(6)}°'
-        : 'Location unavailable';
+        : 'Coordinates unavailable';
 
     final DateTime? captureTime = geotagLoc?.timestamp ?? timestamp;
     final String timeString = captureTime != null
         ? DateFormat('M/d/yyyy • hh:mm a').format(captureTime.toLocal())
         : 'Time unavailable';
 
+    String dynamicAddress = displayAddress;
+
     showDialog(
       context: context,
-      builder: (dialogCtx) => Dialog(
-        backgroundColor: Colors.transparent,
-        insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-        child: Container(
-          constraints: const BoxConstraints(maxWidth: 720),
-          decoration: BoxDecoration(
-            color: const Color(0xFF0F172A).withValues(alpha: 0.96),
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: Colors.white24, width: 1),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Expanded(
-                      child: Row(
-                        children: [
-                          Icon(Icons.center_focus_strong_rounded, color: AppTheme.primaryBlue, size: 22),
-                          SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              'Full Photo Inspection & Geotag Details',
-                              style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-                              overflow: TextOverflow.ellipsis,
-                            ),
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          if (hasValidCoords &&
+              (dynamicAddress == 'Location unavailable' || dynamicAddress.startsWith('Lat:'))) {
+            LocationService.reverseGeocode(lat, lng).then((resolved) {
+              if (resolved.isNotEmpty &&
+                  !resolved.startsWith('Detecting') &&
+                  !resolved.startsWith('Lat:') &&
+                  ctx.mounted) {
+                setDialogState(() {
+                  dynamicAddress = resolved;
+                });
+              }
+            });
+          }
+
+          return Dialog(
+            backgroundColor: Colors.transparent,
+            insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 720),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0F172A).withValues(alpha: 0.96),
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(color: Colors.white24, width: 1),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Expanded(
+                          child: Row(
+                            children: [
+                              Icon(Icons.center_focus_strong_rounded, color: AppTheme.primaryBlue, size: 22),
+                              SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  'Full Photo Inspection & Geotag Details',
+                                  style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
                           ),
-                        ],
-                      ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close_rounded, color: Colors.white),
+                          onPressed: () => Navigator.pop(dialogCtx),
+                        ),
+                      ],
                     ),
-                    IconButton(
-                      icon: const Icon(Icons.close_rounded, color: Colors.white),
-                      onPressed: () => Navigator.pop(dialogCtx),
-                    ),
-                  ],
-                ),
-              ),
-              const Divider(color: Colors.white24, height: 1),
-              Container(
-                constraints: const BoxConstraints(maxHeight: 420),
-                width: double.infinity,
-                color: Colors.black,
-                child: InteractiveViewer(
-                  minScale: 0.8,
-                  maxScale: 4.0,
-                  child: _buildImageWidget(imageUrl, fit: BoxFit.contain, width: double.infinity),
-                ),
-              ),
-              const Divider(color: Colors.white24, height: 1),
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.08),
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: Colors.white12),
                   ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
+                  const Divider(color: Colors.white24, height: 1),
+                  Container(
+                    constraints: const BoxConstraints(maxHeight: 420),
+                    width: double.infinity,
+                    color: Colors.black,
+                    child: InteractiveViewer(
+                      minScale: 0.8,
+                      maxScale: 4.0,
+                      child: _buildImageWidget(imageUrl, fit: BoxFit.contain, width: double.infinity),
+                    ),
+                  ),
+                  const Divider(color: Colors.white24, height: 1),
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Container(
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: Colors.white12),
+                      ),
+                      child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Icon(
-                            Icons.location_on_rounded,
-                            size: 18,
-                            color: hasValidCoords ? AppTheme.emergencyRed : Colors.grey,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  'GPS Address',
-                                  style: TextStyle(color: Colors.white60, fontSize: 11, fontWeight: FontWeight.w600),
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(
+                                Icons.location_on_rounded,
+                                size: 18,
+                                color: hasValidCoords ? AppTheme.emergencyRed : Colors.grey,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text(
+                                      'GPS Address',
+                                      style: TextStyle(color: Colors.white60, fontSize: 11, fontWeight: FontWeight.w600),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      dynamicAddress,
+                                      style: TextStyle(
+                                        color: hasValidCoords ? Colors.white : Colors.white70,
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  displayAddress,
-                                  style: TextStyle(
-                                    color: hasValidCoords ? Colors.white : Colors.white70,
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ],
-                            ),
+                              ),
+                            ],
                           ),
-                        ],
-                      ),
                       const SizedBox(height: 10),
                       const Divider(color: Colors.white12, height: 1),
                       const SizedBox(height: 10),
@@ -980,9 +1053,11 @@ class _WorkProgressScreenState extends State<WorkProgressScreen> {
             ],
           ),
         ),
-      ),
-    );
-  }
+      );
+    },
+  ),
+);
+}
 
   @override
   Widget build(BuildContext context) {
@@ -1336,8 +1411,12 @@ class _WorkProgressScreenState extends State<WorkProgressScreen> {
                   list.sort((a, b) => a.createdAt.compareTo(b.createdAt));
                   return list;
                 })().map((u) {
-                  final bool hasLoc = u.latitude != null && u.latitude != 0.0 && u.longitude != null && u.longitude != 0.0;
-                  final String locAddr = (u.address != null && u.address!.isNotEmpty && u.address != 'Location')
+                  final bool hasLoc = Complaint.isValidCoordinates(u.latitude, u.longitude);
+                  final String locAddr = (u.address != null &&
+                          u.address!.trim().isNotEmpty &&
+                          u.address != 'Location' &&
+                          u.address != 'Location Unavailable' &&
+                          !u.address!.startsWith('Detecting'))
                       ? u.address!
                       : (hasLoc ? 'Lat: ${u.latitude!.toStringAsFixed(4)}°, Long: ${u.longitude!.toStringAsFixed(4)}°' : 'Location unavailable');
 

@@ -7,6 +7,8 @@ import '../providers/complaint_provider.dart';
 import 'auth/sign_in_screen.dart';
 import 'reporter/reporter_main_screen.dart';
 import 'community/community_main_screen.dart';
+import 'admin/admin_main_screen.dart';
+import 'repair_team/repair_team_main_screen.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -52,11 +54,20 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
         Provider.of<ComplaintProvider>(context, listen: false).refreshComplaints();
 
         final verifiedRole = authProvider.currentUser!.role.toLowerCase();
-        final isReporter = verifiedRole == 'reporter';
+        Widget destination;
+        if (verifiedRole == 'admin') {
+          destination = const AdminMainScreen();
+        } else if (verifiedRole == 'repair_team') {
+          destination = const RepairTeamMainScreen();
+        } else if (verifiedRole == 'reporter') {
+          destination = const ReporterMainScreen();
+        } else {
+          destination = const CommunityMainScreen();
+        }
+
         Navigator.of(context).pushReplacement(
           PageRouteBuilder(
-            pageBuilder: (context, animation, secondaryAnimation) =>
-                isReporter ? const ReporterMainScreen() : const CommunityMainScreen(),
+            pageBuilder: (context, animation, secondaryAnimation) => destination,
             transitionsBuilder: (context, animation, secondaryAnimation, child) {
               return FadeTransition(opacity: animation, child: child);
             },
